@@ -79,7 +79,8 @@ bool SwitchMode() {
     if (g_board.refresh >= 0 && g_board.refresh < int(sizeof(kRates) / sizeof(kRates[0]))) {
         dm.dmDisplayFrequency = DWORD(kRates[g_board.refresh]);
         dm.dmFields |= DM_DISPLAYFREQUENCY;
-        if (ChangeDisplaySettingsExW(g_w.device, &dm, nullptr, CDS_FULLSCREEN | CDS_TEST, nullptr) != DISP_CHANGE_SUCCESSFUL)
+        if (ChangeDisplaySettingsExW(g_w.device, &dm, nullptr, CDS_FULLSCREEN | CDS_TEST, nullptr) !=
+            DISP_CHANGE_SUCCESSFUL)
             dm.dmFields &= ~DM_DISPLAYFREQUENCY;
     }
     const LONG r = ChangeDisplaySettingsExW(g_w.device, &dm, nullptr, CDS_FULLSCREEN, nullptr);
@@ -107,8 +108,11 @@ void Cover() {
         GetWindowRect(g_w.hwnd, &g_w.rect);
         g_w.restyled = true;
     }
-    SetWindowLongW(g_w.hwnd, GWL_STYLE, (GetWindowLongW(g_w.hwnd, GWL_STYLE) & ~(WS_OVERLAPPEDWINDOW | WS_DLGFRAME | WS_BORDER)) | WS_POPUP);
-    SetWindowLongW(g_w.hwnd, GWL_EXSTYLE, GetWindowLongW(g_w.hwnd, GWL_EXSTYLE) & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME));
+    SetWindowLongW(g_w.hwnd, GWL_STYLE,
+                   (GetWindowLongW(g_w.hwnd, GWL_STYLE) & ~(WS_OVERLAPPEDWINDOW | WS_DLGFRAME | WS_BORDER)) | WS_POPUP);
+    SetWindowLongW(
+        g_w.hwnd, GWL_EXSTYLE,
+        GetWindowLongW(g_w.hwnd, GWL_EXSTYLE) & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME));
     PlaceWindow(HWND_TOPMOST, m, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 }
 
@@ -266,8 +270,8 @@ HWND MakeOwnWindow() {
         wc.lpszClassName = kClass;
         registered = RegisterClassExW(&wc) != 0;
     }
-    return CreateWindowExW(0, kClass, L"gl2d9", WS_POPUP, 0, 0, g_board.screenW, g_board.screenH, nullptr, nullptr, inst,
-                           nullptr);
+    return CreateWindowExW(0, kClass, L"gl2d9", WS_POPUP, 0, 0, g_board.screenW, g_board.screenH, nullptr, nullptr,
+                           inst, nullptr);
 }
 
 void Hook() {
@@ -302,6 +306,26 @@ void Unhook() {
 
 }  // namespace
 
+HWND WindowMakeHelper() {
+    static const wchar_t kHelperClass[] = L"gl2d9helper";
+    static bool registered;
+    HINSTANCE inst = GetModuleHandleW(nullptr);
+    if (!registered) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = inst;
+        wc.lpszClassName = kHelperClass;
+        registered = RegisterClassExW(&wc) != 0;
+    }
+    return CreateWindowExW(WS_EX_TOOLWINDOW, kHelperClass, L"gl2d9", WS_POPUP, 0, 0, 16, 16, nullptr, nullptr, inst,
+                           nullptr);
+}
+
+void WindowDestroyHelper(HWND h) {
+    if (h && IsWindow(h)) DestroyWindow(h);
+}
+
 RECT ImageRect(int cw, int ch) {
     const int sw = g_board.screenW, sh = g_board.screenH;
     if (g_config.stretch == 1 || cw <= 0 || ch <= 0 || sw <= 0 || sh <= 0) return RECT{0, 0, cw, ch};
@@ -319,7 +343,8 @@ bool MonitorHasMode(int w, int h) {
         MONITORINFOEXW mi = {};
         mi.cbSize = sizeof(mi);
         const POINT origin = {0, 0};
-        const wchar_t* device = GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi) ? mi.szDevice : nullptr;
+        const wchar_t* device =
+            GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi) ? mi.szDevice : nullptr;
         DEVMODEW dm = {};
         dm.dmSize = sizeof(dm);
         for (DWORD i = 0; EnumDisplaySettingsW(device, i, &dm); i++) m.push_back({dm.dmPelsWidth, dm.dmPelsHeight});
@@ -330,6 +355,91 @@ bool MonitorHasMode(int w, int h) {
         if (m.first == DWORD(w) && m.second == DWORD(h)) return true;
     return false;
 }
+
+void FilterGameResolutionLists() {
+    if (!g_config.filterResolutions) return;
+    static bool done;
+    if (done) return;
+    done = true;
+    HMODULE m = GetModuleHandleW(L"GlideDrv.dll");
+    if (!m) return;
+    static const wchar_t kList[] = L"512x384 640x480 800x600 1024x768 1280x1024 1600x1200";
+    const size_t len = sizeof(kList) / sizeof(kList[0]) - 1;
+    // The module's sections searched for the list (each section mapped whole: readable).
+    auto* base = reinterpret_cast<FxU8*>(m);
+    const auto* nt =
+        reinterpret_cast<const IMAGE_NT_HEADERS*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+    wchar_t* found = nullptr;
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections && !found; i++, sec++) {
+        if (!(sec->Characteristics & IMAGE_SCN_MEM_READ)) continue;
+        FxU8* p = base + sec->VirtualAddress;
+        const size_t n = std::min<size_t>(sec->Misc.VirtualSize, sec->SizeOfRawData);
+        for (size_t at = 0; at + sizeof(kList) <= n; at += 2) {
+            if (memcmp(p + at, kList, sizeof(kList)) == 0) {
+                found = reinterpret_cast<wchar_t*>(p + at);
+                break;
+            }
+        }
+    }
+    if (!found) {
+        GL_LOG("resolutions: GlideDrv.dll's list not found (left as it is)");
+        return;
+    }
+    // The entries the monitor has (640x480 always: every game runs in it), in their order.
+    std::wstring out;
+    const std::wstring all(kList);
+    for (size_t pos = 0; pos < all.size();) {
+        size_t end = all.find(L' ', pos);
+        if (end == std::wstring::npos) end = all.size();
+        const std::wstring e = all.substr(pos, end - pos);
+        pos = end + 1;
+        int w = 0, h = 0;
+        if (swscanf(e.c_str(), L"%dx%d", &w, &h) != 2) continue;
+        if (!(w == 640 && h == 480) && !MonitorHasMode(w, h)) continue;
+        if (!out.empty()) out += L' ';
+        out += e;
+    }
+    DWORD old;
+    if (!VirtualProtect(found, sizeof(kList), PAGE_READWRITE, &old)) return;
+    memset(found, 0, sizeof(kList));
+    memcpy(found, out.c_str(), std::min(out.size(), len) * sizeof(wchar_t));
+    VirtualProtect(found, sizeof(kList), old, &old);
+    char narrow[sizeof(kList)];
+    WideCharToMultiByte(CP_UTF8, 0, out.c_str(), -1, narrow, sizeof(narrow), nullptr, nullptr);
+    GL_LOG("resolutions: GlideDrv.dll's list made the monitor's: %s", narrow);
+}
+
+namespace {
+struct FindMain {
+    HWND best = nullptr;
+    bool bestOwnThread = false;
+    LONG bestArea = 0;
+};
+BOOL CALLBACK FindMainProc(HWND w, LPARAM p) {
+    auto* f = reinterpret_cast<FindMain*>(p);
+    DWORD pid = 0;
+    const DWORD tid = GetWindowThreadProcessId(w, &pid);
+    if (pid != GetCurrentProcessId() || !IsWindowVisible(w) || GetWindow(w, GW_OWNER)) return TRUE;
+    RECT r;
+    if (!GetWindowRect(w, &r)) return TRUE;
+    const LONG area = (r.right - r.left) * (r.bottom - r.top);
+    const bool own = tid == GetCurrentThreadId();
+    if (!f->best || (own && !f->bestOwnThread) || (own == f->bestOwnThread && area > f->bestArea)) {
+        f->best = w;
+        f->bestOwnThread = own;
+        f->bestArea = area;
+    }
+    return TRUE;
+}
+// The largest visible top-level window of this process's, the calling thread's first (the
+// game's main window); null if it has none.
+HWND GameMainWindow() {
+    FindMain f;
+    EnumWindows(FindMainProc, reinterpret_cast<LPARAM>(&f));
+    return f.best;
+}
+}  // namespace
 
 bool WindowOpen(HWND requested) {
     WindowClose();
@@ -343,6 +453,9 @@ bool WindowOpen(HWND requested) {
         if (h) GetWindowThreadProcessId(h, &pid);
         if (pid != GetCurrentProcessId()) h = nullptr;
     }
+    // None given and none active (Glide 2.1's grSstOpen takes no window): the game's own main
+    // window, as on a Voodoo the game kept it (and its focus); gl2d9's own only without one.
+    if (!h) h = GameMainWindow();
     if (!h) {
         h = MakeOwnWindow();
         if (!h) {
@@ -352,7 +465,7 @@ bool WindowOpen(HWND requested) {
         g_w.own = true;
         GL_LOG("window: gl2d9's own %p", static_cast<void*>(h));
     } else {
-        GL_LOG("window: %p%s", static_cast<void*>(h), requested ? "" : " (the active window)");
+        GL_LOG("window: %p%s", static_cast<void*>(h), requested ? "" : " (the game's, none given)");
     }
     g_w.hwnd = h;
     g_board.hwnd = h;

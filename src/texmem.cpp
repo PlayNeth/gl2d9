@@ -3,6 +3,7 @@
 // 32-bit ARGB for the renderer.
 #include "texmem.h"
 
+#include "pixconv.h"
 #include "render.h"
 
 #include <optional>
@@ -83,7 +84,8 @@ FxU32 TexCalcBaseAddress(FxU32 start, GrLOD_t largeLod, GrAspectRatio_t aspect, 
     if (evenOdd == GR_MIPMAPLEVELMASK_BOTH) {
         sum = MipMapOffset(ar, largeLod);
     } else {
-        if ((evenOdd == GR_MIPMAPLEVELMASK_EVEN && (largeLod & 1)) || (evenOdd == GR_MIPMAPLEVELMASK_ODD && !(largeLod & 1)))
+        if ((evenOdd == GR_MIPMAPLEVELMASK_EVEN && (largeLod & 1)) ||
+            (evenOdd == GR_MIPMAPLEVELMASK_ODD && !(largeLod & 1)))
             largeLod += 1;
         sum = MipMapOffsetTsplit(ar, largeLod);
     }
@@ -317,6 +319,21 @@ FxU32 DescLevelAddress(const TexDesc& d, int lod) {
     return LevelAddress(base, lod, d.aspect, d.format, d.tsplit);
 }
 
+namespace {
+// The 256 colors an 8-bit texel (or a 16-bit one's low byte) stands for, as ARGB.
+void TexelTable(int format, const FxU32* pal, const Ncc* ncc, FxU32* lut) {
+    for (FxU32 v = 0; v < 256; v++) {
+        switch (format) {
+        case GR_TEXFMT_ARGB_8332: lut[v] = Texel(GR_TEXFMT_RGB_332, v, pal, ncc); break;
+        case GR_TEXFMT_AYIQ_8422: lut[v] = Texel(GR_TEXFMT_YIQ_422, v, pal, ncc); break;
+        case GR_TEXFMT_AP_88: lut[v] = Texel(GR_TEXFMT_P_8, v, pal, ncc); break;
+        case GR_TEXFMT_ALPHA_INTENSITY_88: lut[v] = Texel(GR_TEXFMT_INTENSITY_8, v, pal, ncc); break;
+        default: lut[v] = Texel(format, v, pal, ncc); break;
+        }
+    }
+}
+}  // namespace
+
 void DecodeLevel(const TexDesc& d, int lod, FxU32* out, int outPitch) {
     int w, h;
     LevelSize(lod, d.aspect, &w, &h);
@@ -328,14 +345,34 @@ void DecodeLevel(const TexDesc& d, int lod, FxU32* out, int outPitch) {
     std::optional<Ncc> nccTable;
     if (nccFmt) nccTable.emplace(g_board.ncc[d.tmu][d.nccTable]);
     const Ncc* ncc = nccTable ? &*nccTable : nullptr;
+    // The 16-bit RGB formats converted directly (SSE2); the rest through a table of their 256
+    // colors (the low byte's, alpha the high byte, for the 16-bit ones).
+    const bool direct = d.format == GR_TEXFMT_RGB_565 || d.format == GR_TEXFMT_ARGB_1555 || d.format == GR_TEXFMT_ARGB_4444;
+    FxU32 lut[256];
+    if (!direct) TexelTable(d.format, pal, ncc, lut);
     const size_t size = m.bytes.size();
     for (int y = 0; y < h; y++) {
         FxU32* row = out + size_t(y) * outPitch;
-        size_t a = size_t(addr) + size_t(y) * w * bpp;
-        for (int x = 0; x < w; x++, a += bpp) {
-            FxU32 v = 0;
-            if (a + bpp <= size) v = bpp == 2 ? FxU32(m.bytes[a] | m.bytes[a + 1] << 8) : m.bytes[a];
-            row[x] = Texel(d.format, v, pal, ncc);
+        const size_t a = size_t(addr) + size_t(y) * w * bpp;
+        if (a + size_t(w) * bpp > size) {  // (past the end of the memory: what is there, then 0)
+            for (int x = 0; x < w; x++) {
+                const size_t at = a + size_t(x) * bpp;
+                FxU32 v = 0;
+                if (at + bpp <= size) v = bpp == 2 ? FxU32(m.bytes[at] | m.bytes[at + 1] << 8) : m.bytes[at];
+                row[x] = Texel(d.format, v, pal, ncc);
+            }
+            continue;
+        }
+        const FxU8* src = m.bytes.data() + a;
+        const FxU16* src16 = reinterpret_cast<const FxU16*>(src);  // (texture addresses are 8-byte aligned)
+        switch (d.format) {
+        case GR_TEXFMT_RGB_565: pix::Row565(src16, row, size_t(w)); break;
+        case GR_TEXFMT_ARGB_1555: pix::Row1555(src16, row, size_t(w)); break;
+        case GR_TEXFMT_ARGB_4444: pix::Row4444(src16, row, size_t(w)); break;
+        default:
+            if (bpp == 1) pix::Row8(src, lut, row, size_t(w));
+            else pix::Row8A8(src16, lut, row, size_t(w));
+            break;
         }
     }
 }

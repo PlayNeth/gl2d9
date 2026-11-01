@@ -134,7 +134,8 @@ bool ParseHeader(FILE* f, Gu3dfInfo* info) {
 }
 
 std::vector<GrMipMapInfo>& Table() {
-    if (g_board.mipmaps.capacity() < kMaxMipMaps) g_board.mipmaps.reserve(kMaxMipMaps);  // (pointers into it stay valid)
+    if (g_board.mipmaps.capacity() < kMaxMipMaps)
+        g_board.mipmaps.reserve(kMaxMipMaps);  // (pointers into it stay valid)
     return g_board.mipmaps;
 }
 
@@ -149,7 +150,8 @@ void Rebuild(GrMipMapInfo& m) {
     if (m.t_clamp_mode == GR_TEXTURECLAMP_CLAMP) mode |= SST_TCLAMPT;
     if (m.mipmap_mode == GR_MIPMAP_NEAREST_DITHER) mode |= SST_TLODDITHER;
     if (m.trilinear) mode |= SST_TRILINEAR;
-    FxU32 lod = SST_TLOD_MINMAX_INT(FxU32(m.lod_max), FxU32(m.mipmap_mode == GR_MIPMAP_DISABLE ? m.lod_max : m.lod_min));
+    FxU32 lod =
+        SST_TLOD_MINMAX_INT(FxU32(m.lod_max), FxU32(m.mipmap_mode == GR_MIPMAP_DISABLE ? m.lod_max : m.lod_min));
     lod |= TLodEvenOddBits(m.odd_even_mask);
     lod |= TLodAspectBits(m.aspect_ratio);
     lod |= m.lod_bias << SST_LODBIAS_SHIFT;
@@ -201,8 +203,8 @@ FxBool Gu3dfLoad(const char* filename, Gu3dfInfo* info) {
             }
         if (ok) {
             for (int i = 0; i < 4; i++) {
-                t.packed_data[i] = FxU32(t.yRGB[i * 4]) | FxU32(t.yRGB[i * 4 + 1]) << 8 | FxU32(t.yRGB[i * 4 + 2]) << 16 |
-                                   FxU32(t.yRGB[i * 4 + 3]) << 24;
+                t.packed_data[i] = FxU32(t.yRGB[i * 4]) | FxU32(t.yRGB[i * 4 + 1]) << 8 |
+                                   FxU32(t.yRGB[i * 4 + 2]) << 16 | FxU32(t.yRGB[i * 4 + 3]) << 24;
                 t.packed_data[i + 4] = (FxU32(t.iRGB[i][0]) << 18) | (FxU32(t.iRGB[i][1]) << 9) | FxU32(t.iRGB[i][2]);
                 t.packed_data[i + 8] = (FxU32(t.qRGB[i][0]) << 18) | (FxU32(t.qRGB[i][1]) << 9) | FxU32(t.qRGB[i][2]);
             }
@@ -296,11 +298,15 @@ void GuColorCombineFunction(GrColorCombineFnc_t fnc) {
     const int F = GR_COMBINE_FACTOR_ZERO, LN = GR_COMBINE_LOCAL_CONSTANT, ON = GR_COMBINE_OTHER_CONSTANT;
     switch (fnc) {
     case GR_COLORCOMBINE_ZERO: ColorCombine(GR_COMBINE_FUNCTION_ZERO, F, LN, ON, FXFALSE); break;
-    case GR_COLORCOMBINE_CCRGB: ColorCombine(GR_COMBINE_FUNCTION_LOCAL, F, GR_COMBINE_LOCAL_CONSTANT, ON, FXFALSE); break;
+    case GR_COLORCOMBINE_CCRGB:
+        ColorCombine(GR_COMBINE_FUNCTION_LOCAL, F, GR_COMBINE_LOCAL_CONSTANT, ON, FXFALSE);
+        break;
     case GR_COLORCOMBINE_ITRGB_DELTA0:
         ColorCombineDelta0Mode(FXTRUE);
         [[fallthrough]];
-    case GR_COLORCOMBINE_ITRGB: ColorCombine(GR_COMBINE_FUNCTION_LOCAL, F, GR_COMBINE_LOCAL_ITERATED, ON, FXFALSE); break;
+    case GR_COLORCOMBINE_ITRGB:
+        ColorCombine(GR_COMBINE_FUNCTION_LOCAL, F, GR_COMBINE_LOCAL_ITERATED, ON, FXFALSE);
+        break;
     case GR_COLORCOMBINE_DECAL_TEXTURE:
         ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER, GR_COMBINE_FACTOR_ONE, LN, GR_COMBINE_OTHER_TEXTURE, FXFALSE);
         break;
@@ -316,15 +322,16 @@ void GuColorCombineFunction(GrColorCombineFnc_t fnc) {
                      GR_COMBINE_OTHER_TEXTURE, FXFALSE);
         break;
     case GR_COLORCOMBINE_TEXTURE_TIMES_ITRGB_ADD_ALPHA:
-        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL_ALPHA, GR_COMBINE_FACTOR_LOCAL, GR_COMBINE_LOCAL_ITERATED,
-                     GR_COMBINE_OTHER_TEXTURE, FXFALSE);
+        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL_ALPHA, GR_COMBINE_FACTOR_LOCAL,
+                     GR_COMBINE_LOCAL_ITERATED, GR_COMBINE_OTHER_TEXTURE, FXFALSE);
         break;
     case GR_COLORCOMBINE_TEXTURE_TIMES_ALPHA:
-        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER, GR_COMBINE_FACTOR_LOCAL_ALPHA, LN, GR_COMBINE_OTHER_TEXTURE, FXFALSE);
+        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER, GR_COMBINE_FACTOR_LOCAL_ALPHA, LN, GR_COMBINE_OTHER_TEXTURE,
+                     FXFALSE);
         break;
     case GR_COLORCOMBINE_TEXTURE_TIMES_ALPHA_ADD_ITRGB:
-        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL, GR_COMBINE_FACTOR_LOCAL_ALPHA, GR_COMBINE_LOCAL_ITERATED,
-                     GR_COMBINE_OTHER_TEXTURE, FXFALSE);
+        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL, GR_COMBINE_FACTOR_LOCAL_ALPHA,
+                     GR_COMBINE_LOCAL_ITERATED, GR_COMBINE_OTHER_TEXTURE, FXFALSE);
         break;
     case GR_COLORCOMBINE_TEXTURE_ADD_ITRGB:
         ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL, GR_COMBINE_FACTOR_ONE, GR_COMBINE_LOCAL_ITERATED,
@@ -339,12 +346,12 @@ void GuColorCombineFunction(GrColorCombineFnc_t fnc) {
                      GR_COMBINE_LOCAL_CONSTANT, GR_COMBINE_OTHER_ITERATED, FXFALSE);
         break;
     case GR_COLORCOMBINE_DIFF_SPEC_A:
-        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL, GR_COMBINE_FACTOR_LOCAL_ALPHA, GR_COMBINE_LOCAL_ITERATED,
-                     GR_COMBINE_OTHER_TEXTURE, FXFALSE);
+        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL, GR_COMBINE_FACTOR_LOCAL_ALPHA,
+                     GR_COMBINE_LOCAL_ITERATED, GR_COMBINE_OTHER_TEXTURE, FXFALSE);
         break;
     case GR_COLORCOMBINE_DIFF_SPEC_B:
-        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL_ALPHA, GR_COMBINE_FACTOR_LOCAL, GR_COMBINE_LOCAL_ITERATED,
-                     GR_COMBINE_OTHER_TEXTURE, FXFALSE);
+        ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL_ALPHA, GR_COMBINE_FACTOR_LOCAL,
+                     GR_COMBINE_LOCAL_ITERATED, GR_COMBINE_OTHER_TEXTURE, FXFALSE);
         break;
     case GR_COLORCOMBINE_ONE: ColorCombine(GR_COMBINE_FUNCTION_ZERO, F, LN, ON, FXTRUE); break;
     default: GlideError("grColorCombineFunction: unsupported color combine function", false); break;
@@ -352,7 +359,9 @@ void GuColorCombineFunction(GrColorCombineFnc_t fnc) {
 }
 
 void GuTexCombineFunction(GrChipID_t tmu, GrTextureCombineFnc_t tc) {
-    auto both = [&](GrCombineFunction_t f, GrCombineFactor_t k, FxBool inv) { st::TexCombine(tmu, f, k, f, k, inv, inv); };
+    auto both = [&](GrCombineFunction_t f, GrCombineFactor_t k, FxBool inv) {
+        st::TexCombine(tmu, f, k, f, k, inv, inv);
+    };
     switch (tc) {
     case GR_TEXTURECOMBINE_ZERO: both(GR_COMBINE_FUNCTION_ZERO, GR_COMBINE_FACTOR_ZERO, FXFALSE); break;
     case GR_TEXTURECOMBINE_DECAL: both(GR_COMBINE_FUNCTION_LOCAL, GR_COMBINE_FACTOR_ZERO, FXFALSE); break;
@@ -371,7 +380,9 @@ void GuTexCombineFunction(GrChipID_t tmu, GrTextureCombineFnc_t tc) {
     case GR_TEXTURECOMBINE_TRILINEAR_EVEN:
         both(GR_COMBINE_FUNCTION_SCALE_OTHER_MINUS_LOCAL_ADD_LOCAL, GR_COMBINE_FACTOR_LOD_FRACTION, FXFALSE);
         break;
-    case GR_TEXTURECOMBINE_SUBTRACT: both(GR_COMBINE_FUNCTION_SCALE_OTHER_MINUS_LOCAL, GR_COMBINE_FACTOR_ONE, FXFALSE); break;
+    case GR_TEXTURECOMBINE_SUBTRACT:
+        both(GR_COMBINE_FUNCTION_SCALE_OTHER_MINUS_LOCAL, GR_COMBINE_FACTOR_ONE, FXFALSE);
+        break;
     case GR_TEXTURECOMBINE_OTHER: both(GR_COMBINE_FUNCTION_SCALE_OTHER, GR_COMBINE_FACTOR_ONE, FXFALSE); break;
     default: GlideError("guTexCombineFunction:  Unsupported function", true); break;
     }
@@ -456,8 +467,8 @@ void GuTexDownloadMipMapLevel(GrMipMapId_t mmid, GrLOD_t lod, const void** src) 
     const FxU32 i = TexCalcBaseAddress(0, m.lod_max, m.aspect_ratio, m.format, m.odd_even_mask);
     int w, h;
     LevelSize(lod, m.aspect_ratio, &w, &h);
-    CoreTexDownloadLevel(m.tmu, m.tmu_base_address - i, lod, m.lod_max, m.aspect_ratio, m.format, m.odd_even_mask, *src, 0,
-                         h - 1);
+    CoreTexDownloadLevel(m.tmu, m.tmu_base_address - i, lod, m.lod_max, m.aspect_ratio, m.format, m.odd_even_mask, *src,
+                         0, h - 1);
     *src = static_cast<const FxU8*>(*src) + (size_t(w) * h << (m.format >= GR_TEXFMT_16BIT ? 1 : 0));
 }
 
@@ -581,8 +592,8 @@ bool MpTexCombine(int vtmu) {
 }
 
 FxU32 Blend(FxU32 rgbSrc, FxU32 rgbDst, FxU32 aSrc, FxU32 aDst) {
-    return SST_ENALPHABLEND | rgbSrc << SST_RGBSRCFACT_SHIFT | rgbDst << SST_RGBDSTFACT_SHIFT | aSrc << SST_ASRCFACT_SHIFT |
-           aDst << SST_ADSTFACT_SHIFT;
+    return SST_ENALPHABLEND | rgbSrc << SST_RGBSRCFACT_SHIFT | rgbDst << SST_RGBDSTFACT_SHIFT |
+           aSrc << SST_ASRCFACT_SHIFT | aDst << SST_ADSTFACT_SHIFT;
 }
 constexpr FxU32 kAZero = 0, kAColor = 2, kAOne = 4;
 }  // namespace
@@ -632,9 +643,10 @@ void GuMPDrawTriangle(const RVtx& a, const RVtx& b, const RVtx& c) {
         CoreTriangle(a, b, c);
         GuTexSource(g_mp.mmid[1]);
         MpTexCombine(1);
-        r.fbzColorPath = (pathOrig & ~(SST_RGBSELECT | SST_LOCALSELECT | SST_CC_ZERO_OTHER | SST_CC_SUB_CLOCAL | SST_CC_MSELECT |
-                                       SST_CC_REVERSE_BLEND | SST_CC_ADD_CLOCAL | SST_CC_ADD_ALOCAL | SST_CC_INVERT_OUTPUT)) |
-                         (1u << SST_RGBSELECT_SHIFT);
+        r.fbzColorPath =
+            (pathOrig & ~(SST_RGBSELECT | SST_LOCALSELECT | SST_CC_ZERO_OTHER | SST_CC_SUB_CLOCAL | SST_CC_MSELECT |
+                          SST_CC_REVERSE_BLEND | SST_CC_ADD_CLOCAL | SST_CC_ADD_ALOCAL | SST_CC_INVERT_OUTPUT)) |
+            (1u << SST_RGBSELECT_SHIFT);
         if (fog) r.fogMode = 0;
         r.alphaMode = (alphaOrig & ~blendBits) | Blend(kAColor, kAZero, kAOne, kAZero);
         laterPass();

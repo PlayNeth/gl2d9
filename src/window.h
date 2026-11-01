@@ -14,9 +14,17 @@ void WindowClose();  // the window and the display as they were
 // Each frame (grBufferSwap): the cursor hidden over the picture, and the messages of gl2d9's
 // own window handled (the game doesn't pump any).
 void WindowPump();
+// A hidden window of the calling thread's, for a Direct3D device that can't be made on the
+// game's window (Windows' Direct3D 9 refuses a window another thread made: NFS 4 opens Glide
+// from its rendering thread). Destroyed by the same thread.
+HWND WindowMakeHelper();
+void WindowDestroyHelper(HWND h);
 // Where the screen goes in a client area of cw x ch (as config stretch says).
 RECT ImageRect(int cw, int ch);
 // Whether the game's monitor has a display mode of w x h (the resolutions offered to games).
 bool MonitorHasMode(int w, int h);
+// Resolution lists games carry themselves, filtered in their memory to the monitor's modes
+// (Unreal engine games' GlideDrv.dll: "512x384 640x480 ... 1600x1200", its GetRes answer).
+void FilterGameResolutionLists();
 
 }  // namespace gl2d9

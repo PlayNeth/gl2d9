@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "pixconv.h"
 #include "render.h"
 
 namespace gl2d9 {
@@ -99,7 +100,7 @@ FxU32 FromArgb(int mode, FxU32 c, int lanes) {
     }
 }
 
-inline FxU16 To565(FxU32 c) { return FxU16(((c >> 8) & 0xF800) | ((c >> 5) & 0x07E0) | ((c >> 3) & 0x001F)); }
+inline FxU16 To565(FxU32 c) { return pix::ScalarTo565(c); }
 
 // Bytes a pixel of a write mode takes in the lock's memory.
 int PixelBytes(int mode) {
@@ -117,6 +118,18 @@ bool IsColorBuffer(int buffer) { return buffer == GR_BUFFER_FRONTBUFFER || buffe
 // The write modes with a depth value in the upper 16 bits.
 bool HasDepth(int mode) { return mode >= GR_LFBWRITEMODE_565_DEPTH && mode <= GR_LFBWRITEMODE_1555_DEPTH; }
 
+// The pixel i of a row of `bytes`-byte pixels (2 or 4).
+inline FxU32 Pixel(const FxU8* row, int i, int bytes) {
+    if (bytes == 2) {
+        FxU16 v;
+        memcpy(&v, row + size_t(i) * 2, 2);
+        return v;
+    }
+    FxU32 v;
+    memcpy(&v, row + size_t(i) * 4, 4);
+    return v;
+}
+
 // The write lock's changes to its buffer.
 void Commit() {
     if (g_l.writeBuffer < 0 || !g_l.mem || g_l.snapshot.empty()) return;
@@ -130,8 +143,8 @@ void Commit() {
         const FxU8* b = g_l.snapshot.data() + size_t(y) * stride;
         if (memcmp(a, b, size_t(W) * bytes) == 0) continue;
         int first = 0, last = W - 1;
-        while (memcmp(a + size_t(first) * bytes, b + size_t(first) * bytes, bytes) == 0) first++;
-        while (memcmp(a + size_t(last) * bytes, b + size_t(last) * bytes, bytes) == 0) last--;
+        while (Pixel(a, first, bytes) == Pixel(b, first, bytes)) first++;
+        while (Pixel(a, last, bytes) == Pixel(b, last, bytes)) last--;
         x0 = std::min(x0, first), x1 = std::max(x1, last);
         y0 = std::min(y0, y), y1 = std::max(y1, y);
     }
@@ -151,24 +164,24 @@ void Commit() {
         const FxU8* b = g_l.snapshot.data() + size_t(y) * stride + size_t(x0) * bytes;
         // A lower-left origin: the memory's first row is the screen's bottom one.
         const int row = flip ? h - 1 - j : j;
-        for (int i = 0; i < w; i++, a += bytes, b += bytes) {
-            if (memcmp(a, b, bytes) == 0) continue;
-            FxU32 v = 0;
-            memcpy(&v, a, bytes);
+        for (int i = 0; i < w; i++) {
+            FxU32 v = Pixel(a, i, bytes);
+            if (v == Pixel(b, i, bytes)) continue;
             const size_t k = size_t(row) * w + i;
             if (!color) {
                 g_l.aux[k] = FxU16(v);
             } else {
                 if (HasDepth(g_l.writeMode)) g_l.aux[k] = FxU16(v >> 16);
-                if (bytes == 4 && g_l.writeMode != GR_LFBWRITEMODE_888 && g_l.writeMode != GR_LFBWRITEMODE_8888) v &= 0xFFFF;
+                if (bytes == 4 && g_l.writeMode != GR_LFBWRITEMODE_888 && g_l.writeMode != GR_LFBWRITEMODE_8888)
+                    v &= 0xFFFF;
                 g_l.pixels[k] = ToArgb(g_l.writeMode, v, lanes);
             }
             g_l.mask[k] = 1;
         }
     }
     const int sy = flip ? H - 1 - y1 : y0;
-    RenderWritePixels(g_l.writeBuffer, x0, sy, w, h, color ? g_l.pixels.data() : nullptr, depth ? g_l.aux.data() : nullptr,
-                      g_l.mask.data(), g_l.pipeline);
+    RenderWritePixels(g_l.writeBuffer, x0, sy, w, h, color ? g_l.pixels.data() : nullptr,
+                      depth ? g_l.aux.data() : nullptr, g_l.mask.data(), g_l.pipeline);
 }
 
 // The write lock's memory filled from its buffer, and the copy it is compared with.
@@ -182,6 +195,14 @@ void FillForWrite() {
     const bool haveColor = color && RenderReadBuffer(g_l.writeBuffer, &g_l.pixels);
     const bool haveAux = (!color || HasDepth(g_l.writeMode)) && RenderReadAux(&g_l.aux);
     const int lanes = Lanes();
+    if (haveColor && !haveAux && g_l.writeMode == GR_LFBWRITEMODE_565 && (lanes == 0 || lanes == 2)) {
+        // The common case, a row at a time. (Lanes 1 and 3 swap red and blue.)
+        for (int y = 0; y < H; y++)
+            pix::RowTo565(g_l.pixels.data() + size_t(flip ? H - 1 - y : y) * W,
+                          reinterpret_cast<FxU16*>(g_l.mem + size_t(y) * stride), size_t(W));
+        g_l.snapshot.assign(g_l.mem, g_l.mem + stride * H);
+        return;
+    }
     for (int y = 0; y < H; y++) {
         const size_t srcRow = size_t(flip ? H - 1 - y : y) * W;
         FxU8* row = g_l.mem + size_t(y) * stride;
@@ -215,13 +236,12 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
         if (IsColorBuffer(buffer) && RenderReadBuffer(buffer, &g_l.pixels)) {
             for (int y = 0; y < H; y++) {
                 const FxU32* src = g_l.pixels.data() + size_t(origin == GR_ORIGIN_LOWER_LEFT ? H - 1 - y : y) * W;
-                FxU16* row = m + size_t(y) * kStridePixels;
-                for (int x = 0; x < W; x++) row[x] = To565(src[x]);
+                pix::RowTo565(src, m + size_t(y) * kStridePixels, size_t(W));
             }
         } else if (!IsColorBuffer(buffer) && RenderReadAux(&g_l.aux)) {
             for (int y = 0; y < H; y++)
-                memcpy(m + size_t(y) * kStridePixels, g_l.aux.data() + size_t(origin == GR_ORIGIN_LOWER_LEFT ? H - 1 - y : y) * W,
-                       size_t(W) * 2);
+                memcpy(m + size_t(y) * kStridePixels,
+                       g_l.aux.data() + size_t(origin == GR_ORIGIN_LOWER_LEFT ? H - 1 - y : y) * W, size_t(W) * 2);
         }
         if (g_l.writeBuffer >= 0) {
             // Both locked: the read fill becomes what the write lock compares with.
@@ -318,8 +338,7 @@ FxBool LfbReadRegion(GrBuffer_t src, FxU32 x, FxU32 y, FxU32 w, FxU32 h, FxU32 d
             memcpy(row, g_l.aux.data() + size_t(y + j) * W + x, w * 2);
             continue;
         }
-        const FxU32* s = g_l.pixels.data() + size_t(y + j) * W + x;
-        for (FxU32 i = 0; i < w; i++) row[i] = To565(s[i]);
+        pix::RowTo565(g_l.pixels.data() + size_t(y + j) * W + x, row, w);
     }
     return FXTRUE;
 }
@@ -371,8 +390,8 @@ FxBool LfbWriteRegion(GrBuffer_t dst, FxU32 x, FxU32 y, GrLfbSrcFmt_t format, Fx
             g_l.pixels[k] = ToArgb(int(format), v, lanes);
         }
     }
-    RenderWritePixels(dst, int(x), int(y), int(cw), int(ch), color ? g_l.pixels.data() : nullptr, depth ? g_l.aux.data() : nullptr,
-                      nullptr, pixelPipeline != FXFALSE);
+    RenderWritePixels(dst, int(x), int(y), int(cw), int(ch), color ? g_l.pixels.data() : nullptr,
+                      depth ? g_l.aux.data() : nullptr, nullptr, pixelPipeline != FXFALSE);
     return FXTRUE;
 }
 

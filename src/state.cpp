@@ -108,7 +108,8 @@ void AlphaControlsITRGBLighting(FxBool enable) {
     else R().fbzColorPath &= ~SST_LOCALSELECT_OVERRIDE_WITH_ATEX;
 }
 
-void AlphaBlendFunction(GrAlphaBlendFnc_t rgbSf, GrAlphaBlendFnc_t rgbDf, GrAlphaBlendFnc_t aSf, GrAlphaBlendFnc_t aDf) {
+void AlphaBlendFunction(GrAlphaBlendFnc_t rgbSf, GrAlphaBlendFnc_t rgbDf, GrAlphaBlendFnc_t aSf,
+                        GrAlphaBlendFnc_t aDf) {
     FxU32 a = R().alphaMode;
     // The alpha factors can only be one or zero (Glide forces anything else).
     if (aSf != GR_BLEND_ONE && aSf != GR_BLEND_ZERO) aSf = GR_BLEND_ONE;
@@ -129,7 +130,9 @@ void AlphaTestFunction(GrCmpFnc_t fnc) {
     R().alphaMode = a;
 }
 
-void AlphaTestReferenceValue(GrAlpha_t v) { R().alphaMode = (R().alphaMode & ~SST_ALPHAREF) | FxU32(v) << SST_ALPHAREF_SHIFT; }
+void AlphaTestReferenceValue(GrAlpha_t v) {
+    R().alphaMode = (R().alphaMode & ~SST_ALPHAREF) | FxU32(v) << SST_ALPHAREF_SHIFT;
+}
 
 void ChromakeyMode(GrChromakeyMode_t mode) {
     if (mode == GR_CHROMAKEY_ENABLE) R().fbzMode |= SST_ENCHROMAKEY;
@@ -176,9 +179,13 @@ void ConstantColorValue4(float a, float r, float g, float b) {
 
 void CullMode(GrCullMode_t mode) { St().cullMode = mode; }
 
-void DepthBiasLevel(FxI16 level) { R().zaColor = (R().zaColor & ~SST_ZACOLOR_DEPTH) | (FxU32(level) & SST_ZACOLOR_DEPTH); }
+void DepthBiasLevel(FxI16 level) {
+    R().zaColor = (R().zaColor & ~SST_ZACOLOR_DEPTH) | (FxU32(level) & SST_ZACOLOR_DEPTH);
+}
 
-void DepthBufferFunction(GrCmpFnc_t fnc) { R().fbzMode = (R().fbzMode & ~SST_ZFUNC) | (FxU32(fnc) & 7) << SST_ZFUNC_SHIFT; }
+void DepthBufferFunction(GrCmpFnc_t fnc) {
+    R().fbzMode = (R().fbzMode & ~SST_ZFUNC) | (FxU32(fnc) & 7) << SST_ZFUNC_SHIFT;
+}
 
 void DepthBufferMode(GrDepthBufferMode_t mode) {
     FxU32 m = R().fbzMode & ~(SST_ENDEPTHBUFFER | SST_WBUFFER | SST_ENZBIAS | SST_ZCOMPARE_TO_ZACOLOR);
@@ -234,7 +241,8 @@ void FogTable(const GrFog_t* table) {
 }
 
 void RenderBuffer(GrBuffer_t buffer) {
-    R().fbzMode = (R().fbzMode & ~SST_DRAWBUFFER) | (buffer == GR_BUFFER_FRONTBUFFER ? SST_DRAWBUFFER_FRONT : SST_DRAWBUFFER_BACK);
+    R().fbzMode = (R().fbzMode & ~SST_DRAWBUFFER) |
+                  (buffer == GR_BUFFER_FRONTBUFFER ? SST_DRAWBUFFER_FRONT : SST_DRAWBUFFER_BACK);
 }
 
 void SstOrigin(GrOriginLocation_t origin) {
@@ -274,7 +282,8 @@ void TexClampMode(GrChipID_t tmu, GrTextureClampMode_t s, GrTextureClampMode_t t
     m |= (s == GR_TEXTURECLAMP_CLAMP ? SST_TCLAMPS : 0) | (t == GR_TEXTURECLAMP_CLAMP ? SST_TCLAMPT : 0);
     FxU32& lod = R().tmu[tmu].tLOD;
     lod &= ~(SST_LOD_TMIRRORS | SST_LOD_TMIRRORT);
-    lod |= (s == GR_TEXTURECLAMP_MIRROR_EXT ? SST_LOD_TMIRRORS : 0) | (t == GR_TEXTURECLAMP_MIRROR_EXT ? SST_LOD_TMIRRORT : 0);
+    lod |= (s == GR_TEXTURECLAMP_MIRROR_EXT ? SST_LOD_TMIRRORS : 0) |
+           (t == GR_TEXTURECLAMP_MIRROR_EXT ? SST_LOD_TMIRRORT : 0);
 }
 
 void TexCombine(GrChipID_t tmu, GrCombineFunction_t rgbFn, GrCombineFactor_t rgbFactor, GrCombineFunction_t aFn,
@@ -299,7 +308,9 @@ void TexCombine(GrChipID_t tmu, GrCombineFunction_t rgbFn, GrCombineFactor_t rgb
     case GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL_ALPHA: m |= SST_TCA_ADD_ALOCAL; break;
     case GR_COMBINE_FUNCTION_SCALE_OTHER_MINUS_LOCAL: m |= SST_TCA_SUB_CLOCAL; break;
     case GR_COMBINE_FUNCTION_SCALE_OTHER_MINUS_LOCAL_ADD_LOCAL: m |= SST_TCA_SUB_CLOCAL | SST_TCA_ADD_CLOCAL; break;
-    case GR_COMBINE_FUNCTION_SCALE_OTHER_MINUS_LOCAL_ADD_LOCAL_ALPHA: m |= SST_TCA_SUB_CLOCAL | SST_TCA_ADD_ALOCAL; break;
+    case GR_COMBINE_FUNCTION_SCALE_OTHER_MINUS_LOCAL_ADD_LOCAL_ALPHA:
+        m |= SST_TCA_SUB_CLOCAL | SST_TCA_ADD_ALOCAL;
+        break;
     case GR_COMBINE_FUNCTION_SCALE_MINUS_LOCAL_ADD_LOCAL:
         m |= SST_TCA_ZERO_OTHER | SST_TCA_SUB_CLOCAL | SST_TCA_ADD_CLOCAL;
         break;
@@ -330,7 +341,8 @@ void TexFilterMode(GrChipID_t tmu, GrTextureFilterMode_t minf, GrTextureFilterMo
     if (!TmuOk(tmu)) return;
     FxU32& m = R().tmu[tmu].textureMode;
     m &= ~(SST_TMINFILTER | SST_TMAGFILTER);
-    m |= (minf == GR_TEXTUREFILTER_BILINEAR ? SST_TMINFILTER : 0) | (magf == GR_TEXTUREFILTER_BILINEAR ? SST_TMAGFILTER : 0);
+    m |= (minf == GR_TEXTUREFILTER_BILINEAR ? SST_TMINFILTER : 0) |
+         (magf == GR_TEXTUREFILTER_BILINEAR ? SST_TMAGFILTER : 0);
 }
 
 void TexLodBiasValue(GrChipID_t tmu, float bias) {
@@ -382,7 +394,8 @@ void TexSource(GrChipID_t tmu, FxU32 startAddress, FxU32 evenOdd, const GrTexInf
     m |= (FxU32(info->format) << SST_TFORMAT_SHIFT) | SST_TPERSP_ST | SST_TCLAMPW;
     FxU32 lod = R().tmu[tmu].tLOD;
     lod &= ~(SST_LODMIN | SST_LODMAX | SST_LOD_ASPECT | SST_LOD_TSPLIT | SST_LOD_ODD | SST_LOD_S_IS_WIDER);
-    lod |= SST_TLOD_MINMAX_INT(FxU32(info->largeLod), FxU32(c.mmMode == GR_MIPMAP_DISABLE ? info->largeLod : info->smallLod));
+    lod |= SST_TLOD_MINMAX_INT(FxU32(info->largeLod),
+                               FxU32(c.mmMode == GR_MIPMAP_DISABLE ? info->largeLod : info->smallLod));
     lod |= TLodEvenOddBits(evenOdd);
     lod |= TLodAspectBits(info->aspectRatio);
     R().tmu[tmu].texBaseAddr = base;
@@ -396,7 +409,8 @@ void TexMultibase(GrChipID_t tmu, FxBool enable) {
     else R().tmu[tmu].tLOD &= ~SST_TMULTIBASEADDR;
 }
 
-void TexMultibaseAddress(GrChipID_t tmu, GrTexBaseRange_t range, FxU32 startAddress, FxU32 evenOdd, const GrTexInfo* info) {
+void TexMultibaseAddress(GrChipID_t tmu, GrTexBaseRange_t range, FxU32 startAddress, FxU32 evenOdd,
+                         const GrTexInfo* info) {
     if (!TmuOk(tmu) || !info) return;
     static const GrLOD_t kLod[] = {GR_LOD_256, GR_LOD_128, GR_LOD_64, GR_LOD_32};
     if (range > GR_TEXBASE_32_TO_1) return;

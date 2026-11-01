@@ -49,11 +49,11 @@ inline RVtx V(const GrVertex* g) {
 std::vector<RVtx> g_poly;
 
 // log=2: a draw's first vertex, with every TMU's coordinates.
-void TraceVertex(const char* what, int n, const GrVertex* v) {
+void TraceVertex(int n, const GrVertex* v) {
     if (LogLevel() < 2 || !v) return;
     GL_TRACE("  %d verts; v0 xy %.1f,%.1f oow %g a %.0f | tmu0 %g,%g,%g | tmu1 %g,%g,%g", n, v->x, v->y, v->oow, v->a,
-             v->tmuvtx[0].sow, v->tmuvtx[0].tow, v->tmuvtx[0].oow, v->tmuvtx[1].sow, v->tmuvtx[1].tow, v->tmuvtx[1].oow);
-    (void)what;
+             v->tmuvtx[0].sow, v->tmuvtx[0].tow, v->tmuvtx[0].oow, v->tmuvtx[1].sow, v->tmuvtx[1].tow,
+             v->tmuvtx[1].oow);
 }
 
 void Polygon(int n, const int* idx, const GrVertex* list, bool aa = false) {
@@ -92,7 +92,7 @@ int g_lfb21Read = -1, g_lfb21Write = -1;
 
 GLAPI void grDrawTriangle(const GrVertex* a, const GrVertex* b, const GrVertex* c) {
     ENTRY("grDrawTriangle");
-    TraceVertex("grDrawTriangle", 3, a);
+    TraceVertex(3, a);
     if (a && b && c) CoreTriangle(V(a), V(b), V(c));
 }
 GLAPI void grDrawPoint(const GrVertex* p) {
@@ -109,7 +109,7 @@ GLAPI void grDrawPolygon(int n, const int* idx, const GrVertex* list) {
 }
 GLAPI void grDrawPolygonVertexList(int n, const GrVertex* list) {
     ENTRY("grDrawPolygonVertexList");
-    TraceVertex("grDrawPolygonVertexList", n, list);
+    TraceVertex(n, list);
     Polygon(n, nullptr, list);
 }
 GLAPI void grDrawPlanarPolygon(int n, const int* idx, const GrVertex* list) {
@@ -118,7 +118,7 @@ GLAPI void grDrawPlanarPolygon(int n, const int* idx, const GrVertex* list) {
 }
 GLAPI void grDrawPlanarPolygonVertexList(int n, const GrVertex* list) {
     ENTRY("grDrawPlanarPolygonVertexList");
-    TraceVertex("grDrawPlanarPolygonVertexList", n, list);
+    TraceVertex(n, list);
     Polygon(n, nullptr, list);
 }
 // Antialiased primitives: with alpha-blended fringes on the edges, as 3dfx's Glide draws them.
@@ -174,12 +174,14 @@ GLAPI void grRenderBuffer(GrBuffer_t b) {
 
 // ---------------------------------------------------------------- state
 
-GLAPI void grAlphaBlendFunction(GrAlphaBlendFnc_t rs, GrAlphaBlendFnc_t rd, GrAlphaBlendFnc_t as, GrAlphaBlendFnc_t ad) {
+GLAPI void grAlphaBlendFunction(GrAlphaBlendFnc_t rs, GrAlphaBlendFnc_t rd, GrAlphaBlendFnc_t as,
+                                GrAlphaBlendFnc_t ad) {
     ENTRY("grAlphaBlendFunction");
     GL_TRACE("  (%ld, %ld, %ld, %ld)", long(rs), long(rd), long(as), long(ad));
     st::AlphaBlendFunction(rs, rd, as, ad);
 }
-GLAPI void grAlphaCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o, FxBool inv) {
+GLAPI void grAlphaCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o,
+                          FxBool inv) {
     ENTRY("grAlphaCombine");
     GL_TRACE("  (%ld, %ld, %ld, %ld, %d)", long(f), long(k), long(l), long(o), inv);
     st::AlphaCombine(f, k, l, o, inv);
@@ -208,7 +210,8 @@ GLAPI void grClipWindow(FxU32 minx, FxU32 miny, FxU32 maxx, FxU32 maxy) {
     ENTRY("grClipWindow");
     st::ClipWindow(minx, miny, maxx, maxy);
 }
-GLAPI void grColorCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o, FxBool inv) {
+GLAPI void grColorCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o,
+                          FxBool inv) {
     ENTRY("grColorCombine");
     GL_TRACE("  (%ld, %ld, %ld, %ld, %d)", long(f), long(k), long(l), long(o), inv);
     st::ColorCombine(f, k, l, o, inv);
@@ -341,14 +344,18 @@ GLAPI void grTexNCCTable(GrChipID_t tmu, GrNCCTable_t t) {
 }
 GLAPI void grTexSource(GrChipID_t tmu, FxU32 start, FxU32 evenOdd, const GrTexInfo* info) {
     ENTRY("grTexSource");
-    if (info) GL_TRACE("  (%ld, 0x%lx, %lu, lod %ld-%ld aspect %ld fmt %ld)", long(tmu), static_cast<unsigned long>(start), static_cast<unsigned long>(evenOdd), long(info->largeLod), long(info->smallLod), long(info->aspectRatio), long(info->format));
+    if (info)
+        GL_TRACE("  (%ld, 0x%lx, %lu, lod %ld-%ld aspect %ld fmt %ld)", long(tmu), static_cast<unsigned long>(start),
+                 static_cast<unsigned long>(evenOdd), long(info->largeLod), long(info->smallLod),
+                 long(info->aspectRatio), long(info->format));
     st::TexSource(tmu, start, evenOdd, info);
 }
 GLAPI void grTexMultibase(GrChipID_t tmu, FxBool e) {
     ENTRY("grTexMultibase");
     st::TexMultibase(tmu, e);
 }
-GLAPI void grTexMultibaseAddress(GrChipID_t tmu, GrTexBaseRange_t range, FxU32 start, FxU32 evenOdd, const GrTexInfo* info) {
+GLAPI void grTexMultibaseAddress(GrChipID_t tmu, GrTexBaseRange_t range, FxU32 start, FxU32 evenOdd,
+                                 const GrTexInfo* info) {
     ENTRY("grTexMultibaseAddress");
     st::TexMultibaseAddress(tmu, range, start, evenOdd, info);
 }
@@ -366,22 +373,28 @@ GLAPI FxU32 grTexTextureMemRequired(FxU32 evenOdd, const GrTexInfo* info) {
 }
 GLAPI void grTexDownloadMipMap(GrChipID_t tmu, FxU32 start, FxU32 evenOdd, const GrTexInfo* info) {
     ENTRY("grTexDownloadMipMap");
-    if (info) GL_TRACE("  (%ld, 0x%lx, %lu, lod %ld-%ld aspect %ld fmt %ld)", long(tmu), static_cast<unsigned long>(start), static_cast<unsigned long>(evenOdd), long(info->largeLod), long(info->smallLod), long(info->aspectRatio), long(info->format));
+    if (info)
+        GL_TRACE("  (%ld, 0x%lx, %lu, lod %ld-%ld aspect %ld fmt %ld)", long(tmu), static_cast<unsigned long>(start),
+                 static_cast<unsigned long>(evenOdd), long(info->largeLod), long(info->smallLod),
+                 long(info->aspectRatio), long(info->format));
     CoreTexDownloadMipMap(tmu, start, evenOdd, info);
 }
-GLAPI void grTexDownloadMipMapLevel(GrChipID_t tmu, FxU32 start, GrLOD_t thisLod, GrLOD_t largeLod, GrAspectRatio_t aspect,
-                                    GrTextureFormat_t fmt, FxU32 evenOdd, const void* data) {
+GLAPI void grTexDownloadMipMapLevel(GrChipID_t tmu, FxU32 start, GrLOD_t thisLod, GrLOD_t largeLod,
+                                    GrAspectRatio_t aspect, GrTextureFormat_t fmt, FxU32 evenOdd, const void* data) {
     ENTRY("grTexDownloadMipMapLevel");
-    GL_TRACE("  (%ld, 0x%lx, lod %ld of %ld, aspect %ld, fmt %ld, %lu)", long(tmu), static_cast<unsigned long>(start), long(thisLod), long(largeLod), long(aspect), long(fmt), static_cast<unsigned long>(evenOdd));
+    GL_TRACE("  (%ld, 0x%lx, lod %ld of %ld, aspect %ld, fmt %ld, %lu)", long(tmu), static_cast<unsigned long>(start),
+             long(thisLod), long(largeLod), long(aspect), long(fmt), static_cast<unsigned long>(evenOdd));
     int w, h;
     LevelSize(thisLod, aspect, &w, &h);
     CoreTexDownloadLevel(tmu, start, thisLod, largeLod, aspect, fmt, evenOdd, data, 0, h - 1);
 }
 GLAPI void grTexDownloadMipMapLevelPartial(GrChipID_t tmu, FxU32 start, GrLOD_t thisLod, GrLOD_t largeLod,
-                                           GrAspectRatio_t aspect, GrTextureFormat_t fmt, FxU32 evenOdd, const void* data,
-                                           int t, int maxT) {
+                                           GrAspectRatio_t aspect, GrTextureFormat_t fmt, FxU32 evenOdd,
+                                           const void* data, int t, int maxT) {
     ENTRY("grTexDownloadMipMapLevelPartial");
-    GL_TRACE("  (%ld, 0x%lx, lod %ld of %ld, aspect %ld, fmt %ld, %lu, rows %d-%d)", long(tmu), static_cast<unsigned long>(start), long(thisLod), long(largeLod), long(aspect), long(fmt), static_cast<unsigned long>(evenOdd), t, maxT);
+    GL_TRACE("  (%ld, 0x%lx, lod %ld of %ld, aspect %ld, fmt %ld, %lu, rows %d-%d)", long(tmu),
+             static_cast<unsigned long>(start), long(thisLod), long(largeLod), long(aspect), long(fmt),
+             static_cast<unsigned long>(evenOdd), t, maxT);
     CoreTexDownloadLevel(tmu, start, thisLod, largeLod, aspect, fmt, evenOdd, data, t, maxT);
 }
 GLAPI void grTexDownloadTable(GrChipID_t tmu, GrTexTable_t type, const void* data) {
@@ -412,8 +425,8 @@ GLAPI void ConvertAndDownloadRle(GrChipID_t tmu, FxU32 start, GrLOD_t thisLod, G
 
 // ---------------------------------------------------------------- the linear frame buffer
 
-GLAPI FxBool grLfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t mode, GrOriginLocation_t origin, FxBool pipeline,
-                       GrLfbInfo_t* info) {
+GLAPI FxBool grLfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t mode, GrOriginLocation_t origin,
+                       FxBool pipeline, GrLfbInfo_t* info) {
     ENTRY("grLfbLock");
     return LfbLock(type, buffer, mode, origin, pipeline, info);
 }
@@ -443,7 +456,8 @@ GLAPI void guFbReadRegion(int x, int y, int w, int h, void* dst, int stride) {
 GLAPI void guFbWriteRegion(int x, int y, int w, int h, const void* src, int stride) {
     ENTRY("guFbWriteRegion");
     if (x >= 0 && y >= 0 && w > 0 && h > 0)
-        LfbWriteRegion(GR_BUFFER_BACKBUFFER, FxU32(x), FxU32(y), GR_LFBWRITEMODE_565, FxU32(w), FxU32(h), FXFALSE, stride, src);
+        LfbWriteRegion(GR_BUFFER_BACKBUFFER, FxU32(x), FxU32(y), GR_LFBWRITEMODE_565, FxU32(w), FxU32(h), FXFALSE,
+                       stride, src);
 }
 
 #ifdef GLIDE21
@@ -470,7 +484,8 @@ GLAPI void* grLfbGetWritePtr(GrBuffer_t buffer) {
     g_lfb21Write = -1;
     GrLfbInfo_t info = {};
     info.size = sizeof(info);
-    if (!LfbLock(GR_LFB_WRITE_ONLY, buffer, g_lfb21Mode, g_lfb21Origin, g_lfb21Bypass ? FXFALSE : FXTRUE, &info)) return nullptr;
+    if (!LfbLock(GR_LFB_WRITE_ONLY, buffer, g_lfb21Mode, g_lfb21Origin, g_lfb21Bypass ? FXFALSE : FXTRUE, &info))
+        return nullptr;
     g_lfb21Write = buffer;
     return info.lfbPtr;
 }
@@ -479,8 +494,8 @@ GLAPI void grLfbOrigin(GrOriginLocation_t origin) { g_lfb21Origin = origin; }
 GLAPI void grLfbBypassMode(GrLfbBypassMode_t mode) { g_lfb21Bypass = mode == GR_LFBBYPASS_ENABLE; }
 GLAPI void grSstPassthruMode(GrPassthruMode_t) {}
 GLAPI void grSplash() {}
-GLAPI FxBool grSstOpen(GrScreenResolution_t res, GrScreenRefresh_t refresh, GrColorFormat_t format, GrOriginLocation_t origin,
-                       GrSmoothingMode_t, int numBuffers) {
+GLAPI FxBool grSstOpen(GrScreenResolution_t res, GrScreenRefresh_t refresh, GrColorFormat_t format,
+                       GrOriginLocation_t origin, GrSmoothingMode_t, int numBuffers) {
     ENTRY("grSstOpen");
     return CoreWinOpen(nullptr, res, refresh, format, origin, numBuffers, 1);
 }
@@ -494,6 +509,7 @@ GLAPI void grGlideInit() {
     ENTRY("grGlideInit");
     GL_LOG("grGlideInit (%s)", g_version == kGlide21 ? "Glide 2.1" : "Glide 2.x");
     CoreInit();
+    FilterGameResolutionLists();
 }
 GLAPI void grGlideShutdown() {
     ENTRY("grGlideShutdown");
@@ -609,16 +625,16 @@ GLAPI void guMPDrawTriangle(const GrVertex* a, const GrVertex* b, const GrVertex
 GLAPI void guMovieSetName(const char*) {}
 GLAPI void guMovieStart() {}
 GLAPI void guMovieStop() {}
-GLAPI GrMipMapId_t guTexAllocateMemory(GrChipID_t tmu, FxU8 oddEven, int w, int h, GrTextureFormat_t fmt, GrMipMapMode_t mm,
-                                       GrLOD_t small, GrLOD_t large, GrAspectRatio_t aspect, GrTextureClampMode_t sc,
-                                       GrTextureClampMode_t tc, GrTextureFilterMode_t minf, GrTextureFilterMode_t magf,
-                                       float bias, FxBool trilinear) {
+GLAPI GrMipMapId_t guTexAllocateMemory(GrChipID_t tmu, FxU8 oddEven, int w, int h, GrTextureFormat_t fmt,
+                                       GrMipMapMode_t mm, GrLOD_t small, GrLOD_t large, GrAspectRatio_t aspect,
+                                       GrTextureClampMode_t sc, GrTextureClampMode_t tc, GrTextureFilterMode_t minf,
+                                       GrTextureFilterMode_t magf, float bias, FxBool trilinear) {
     ENTRY("guTexAllocateMemory");
     return GuTexAllocateMemory(tmu, oddEven, w, h, fmt, mm, small, large, aspect, sc, tc, minf, magf, bias, trilinear);
 }
-GLAPI FxBool guTexChangeAttributes(GrMipMapId_t id, int w, int h, GrTextureFormat_t fmt, GrMipMapMode_t mm, GrLOD_t small,
-                                   GrLOD_t large, GrAspectRatio_t aspect, GrTextureClampMode_t sc, GrTextureClampMode_t tc,
-                                   GrTextureFilterMode_t minf, GrTextureFilterMode_t magf) {
+GLAPI FxBool guTexChangeAttributes(GrMipMapId_t id, int w, int h, GrTextureFormat_t fmt, GrMipMapMode_t mm,
+                                   GrLOD_t small, GrLOD_t large, GrAspectRatio_t aspect, GrTextureClampMode_t sc,
+                                   GrTextureClampMode_t tc, GrTextureFilterMode_t minf, GrTextureFilterMode_t magf) {
     ENTRY("guTexChangeAttributes");
     return GuTexChangeAttributes(id, w, h, fmt, mm, small, large, aspect, sc, tc, minf, magf);
 }

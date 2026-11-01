@@ -14,7 +14,7 @@
 
 namespace gl2d9 {
 
-#define GL2D9_VERSION "0.1.0"
+#define GL2D9_VERSION "1.0.0"
 
 enum { kDisplaySwitch, kDisplayWindow, kDisplayBorderless };
 enum { kVSyncAuto, kVSyncOn, kVSyncOff };
@@ -26,14 +26,22 @@ extern GlideVersion g_version;
 struct Config {
     int display = kDisplayBorderless;  // switch: real mode switch; window; borderless: the screen covered, scaled
     int stretch = 0;                   // window & borderless scaling: 0 aspect, 1 fill, 2 integer
-    int filter = 0;                    // the frame scaled to the screen: 0 point, 1 linear, 2 sharp
+    int filter = 1;                    // the frame scaled to the screen: 0 point, 1 linear, 2 sharp
     int vsync = kVSyncAuto;            // auto: grBufferSwap's interval; on / off: forced
     int scale = 1;                     // the game's resolution drawn N times larger on the GPU (1-8)
     bool systemD3D9 = true;            // Windows' own d3d9.dll, not one in the game folder (DXVK)
-    int tmuMB = 4;                     // texture memory a TMU reports (and games can use), MB
+    int tmuMB = 0;                     // texture memory a TMU reports (and games can use), MB; 0 = auto
     int fbMB = 4;                      // frame buffer memory reported, MB
-    int tmus = 2;                      // texture units reported (Glide 2.1: 1)
+    int tmus = 2;                      // texture units reported (1 or 2, every Glide)
     bool shaderCache = true;           // compiled shaders kept in gl2d9.shaders (no compiling next time)
+    int screenshotKey = VK_F12;        // saves the frame shown as a BMP (screenshots\ beside the game); 0: none
+    bool filterResolutions = true;     // resolution lists games carry themselves: the monitor's only
+    bool voodooLook = false;           // the picture shown dithered to 16 bits, as the Voodoo's was
+    int overlayBias = 1;               // passes laid on drawn surfaces pulled forward N depth steps (shader.cpp)
+    int fpsLimit = 0;                  // frames per second at most (0: off), paced at the buffer swap
+    int cpus = 1;                      // processors the game runs on (0: all): one, as the games' PCs had
+    bool texLinear = false;            // point-filtered textures drawn bilinear (cut-outs keep theirs)
+    int anisotropy = 0;                // anisotropic filtering on smoothly filtered textures (0, 2-16)
     int log = 0;                       // 0 off, 1 info, 2 trace (every call)
     std::wstring logFile;              // empty: gl2d9.log next to the game's executable
 };
@@ -42,9 +50,13 @@ void LoadConfig(HMODULE self);
 // Where the shader cache goes: beside this DLL, or (that folder not writable) in
 // %LOCALAPPDATA%\gl2d9 under the game's name. Empty: nowhere.
 std::wstring ShaderCachePath();
+// A new file for a screenshot: screenshots\<game>_<date>_<time>.bmp beside the game's executable.
+std::wstring ScreenshotPath();
 
 // ---------------------------------------------------------------- logging
 void LogInit();
+void ApplyCpus();   // cpus=: the processors the process runs on (after LogInit: logged)
+void LimitFrame();  // fpslimit=: waits out the rest of the frame's time (at the buffer swap)
 extern int g_logLevel;  // (util.cpp) read at every log and trace site: inline
 inline int LogLevel() { return g_logLevel; }
 void Log(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));

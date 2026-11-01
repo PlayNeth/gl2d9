@@ -1,4 +1,6 @@
 build/
+tests/bin/
 *.dll
 *.exe
 *.log
+*.shaders

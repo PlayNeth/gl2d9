@@ -68,10 +68,10 @@ std::string TmuCombine(int t, FxU32 m, const std::string& otherVar) {
         Unit((otherVar + ".rgb").c_str(), (L + ".rgb").c_str(), (L + ".aaa").c_str(),
              factor((m & SST_TC_MSELECT) >> SST_TC_MSELECT_SHIFT, false), m & SST_TC_ZERO_OTHER, m & SST_TC_SUB_CLOCAL,
              m & SST_TC_REVERSE_BLEND, m & SST_TC_ADD_CLOCAL, m & SST_TC_ADD_ALOCAL, m & SST_TC_INVERT_OUTPUT);
-    const std::string a =
-        Unit((otherVar + ".a").c_str(), (L + ".a").c_str(), (L + ".a").c_str(),
-             factor((m & SST_TCA_MSELECT) >> SST_TCA_MSELECT_SHIFT, true), m & SST_TCA_ZERO_OTHER, m & SST_TCA_SUB_CLOCAL,
-             m & SST_TCA_REVERSE_BLEND, m & SST_TCA_ADD_CLOCAL, m & SST_TCA_ADD_ALOCAL, m & SST_TCA_INVERT_OUTPUT);
+    const std::string a = Unit((otherVar + ".a").c_str(), (L + ".a").c_str(), (L + ".a").c_str(),
+                               factor((m & SST_TCA_MSELECT) >> SST_TCA_MSELECT_SHIFT, true), m & SST_TCA_ZERO_OTHER,
+                               m & SST_TCA_SUB_CLOCAL, m & SST_TCA_REVERSE_BLEND, m & SST_TCA_ADD_CLOCAL,
+                               m & SST_TCA_ADD_ALOCAL, m & SST_TCA_INVERT_OUTPUT);
     return "float4((float3)(" + rgb + "), " + a + ")";  // (the rgb part may come out scalar: "0")
 }
 
@@ -88,6 +88,48 @@ bool UsesLocal(FxU32 m) {
            tc == 1 || tc == 3 || ta == 1 || ta == 3;
 }
 
+}  // namespace
+
+// The alpha test and blending in the shader (BlendInShader): on c (float3) and a, the color
+// and alpha drawn, prefog (float3) the color before fog, and the target's pixel dstExpr.
+std::string BlendCode(FxU32 am, const char* dstExpr) {
+    std::string s;
+    // The alpha test (Direct3D's would test the blended alpha), on the 8-bit alpha.
+    const FxU32 func = (am & SST_ALPHAFUNC) >> SST_ALPHAFUNC_SHIFT;
+    if (am & SST_ENALPHAFUNC) {
+        static const char* kCmp[] = {"false", "<", "==", "<=", ">", "!=", ">=", "true"};
+        if (func == 0) s += "  discard;\n";
+        else if (func != 7) s += std::string("  if (!(round(a * 255) ") + kCmp[func] + " target.y)) discard;\n";
+    }
+    s += std::string("  float4 dst = ") + dstExpr + ";\n";
+    auto factor = [](FxU32 f, bool src, bool alpha) -> std::string {
+        const char* one = alpha ? "1" : "float3(1, 1, 1)";
+        switch (f) {
+        case 0: return alpha ? "0" : "float3(0, 0, 0)";
+        case 1: return alpha ? "a" : "a.xxx";
+        case 2: return src ? (alpha ? "dst.a" : "dst.rgb") : (alpha ? "a" : "c");
+        case 3: return alpha ? "dst.a" : "dst.aaa";
+        case 4: return one;
+        case 5: return alpha ? "(1 - a)" : "(1 - a).xxx";
+        case 6: return src ? (alpha ? "(1 - dst.a)" : "(1 - dst.rgb)") : (alpha ? "(1 - a)" : "(1 - c)");
+        case 7: return alpha ? "(1 - dst.a)" : "(1 - dst.aaa)";
+        case 15:
+            if (src) return alpha ? "1" : "min(a, 1 - dst.a).xxx";  // ALPHA_SATURATE
+            return alpha ? "a" : "prefog";                          // PREFOG_COLOR
+        default: return alpha ? "0" : "float3(0, 0, 0)";
+        }
+    };
+    const std::string sf = factor((am & SST_RGBSRCFACT) >> SST_RGBSRCFACT_SHIFT, true, false);
+    const std::string df = factor((am & SST_RGBDSTFACT) >> SST_RGBDSTFACT_SHIFT, false, false);
+    const std::string saf = factor((am & SST_ASRCFACT) >> SST_ASRCFACT_SHIFT, true, true);
+    const std::string daf = factor((am & SST_ADSTFACT) >> SST_ADSTFACT_SHIFT, false, true);
+    s += "  c = saturate(c * " + sf + " + dst.rgb * " + df + ");\n";
+    s += "  a = saturate(a * " + saf + " + dst.a * " + daf + ");\n";
+    return s;
+}
+
+namespace {
+
 std::string Generate(const ShaderKey& k) {
     const FxU32 p = k.colorPath;
     const bool texturing = (p & SST_ENTEXTUREMAP) != 0;
@@ -98,11 +140,13 @@ std::string Generate(const ShaderKey& k) {
     s += "float4 detailK0 : register(c6);\nfloat4 detailK1 : register(c7);\nfloat4 delta0 : register(c8);\n";
     s += "float4 stipple : register(c9);\nfloat4 target : register(c10);\nfloat4 depthK : register(c11);\n";
     s += "sampler2D dstTex : register(s3);\n";
-    s += "struct In { float4 col : TEXCOORD0; float4 st0 : TEXCOORD1; float4 st1 : TEXCOORD2; float4 misc : TEXCOORD3; };\n";
+    s += "struct In { float4 col : TEXCOORD0; float4 st0 : TEXCOORD1; float4 st1 : TEXCOORD2; float4 misc : TEXCOORD3; "
+         "};\n";
     s += "struct Out { float4 c : COLOR; float z : DEPTH; };\n";
-    s += k.depthConst ? "Out" : "float4";
+    const bool depthOut = k.depthConst || k.depthOut;
+    s += depthOut ? "Out" : "float4";
     s += (k.stipple || k.blend) ? " main(In i, float2 vpos : VPOS)" : " main(In i)";
-    s += k.depthConst ? " {\n" : " : COLOR {\n";
+    s += depthOut ? " {\n" : " : COLOR {\n";
     if (k.stipple) {
         // The pixel's bit of the stipple register (MAME's Voodoo: pattern bit (y & 3) * 8 +
         // (~x & 7)); the rotated mode, which steps through it per pixel drawn, as the pattern
@@ -138,12 +182,14 @@ std::string Generate(const ShaderKey& k) {
             else
                 s += "  float4 l" + T + " = 0;\n";
             // LOD (in levels of the 256-texel space) for the detail and LOD-fraction factors.
-            s += "  float2 dx" + T + " = ddx(uv" + T + " * texScale" + T + ".zw), dy" + T + " = ddy(uv" + T + " * texScale" + T +
-                 ".zw);\n";
-            s += "  float lod" + T + " = 0.5 * log2(max(dot(dx" + T + ", dx" + T + "), dot(dy" + T + ", dy" + T + ")) + 1e-10);\n";
+            s += "  float2 dx" + T + " = ddx(uv" + T + " * texScale" + T + ".zw), dy" + T + " = ddy(uv" + T +
+                 " * texScale" + T + ".zw);\n";
+            s += "  float lod" + T + " = 0.5 * log2(max(dot(dx" + T + ", dx" + T + "), dot(dy" + T + ", dy" + T +
+                 ")) + 1e-10);\n";
             s += "  float lodfrac" + T + " = frac(lod" + T + ");\n";
             // Detail: (bias - lod) << scale, at most detail max.
-            s += "  float detail" + T + " = min(detailK" + T + ".z, saturate((detailK" + T + ".x - lod" + T + ") * detailK" + T + ".y));\n";
+            s += "  float detail" + T + " = min(detailK" + T + ".z, saturate((detailK" + T + ".x - lod" + T +
+                 ") * detailK" + T + ".y));\n";
             s += "  float4 o" + T + " = " + up + ";\n";
             s += "  float4 r" + T + " = " + TmuCombine(t, m, "o" + T) + ";\n";
             up = "r" + T;
@@ -215,41 +261,33 @@ std::string Generate(const ShaderKey& k) {
             else s += "  c = lerp(c, fogColor.rgb, fa);\n";
         }
     }
-    if (k.blend) {
-        const FxU32 am = k.blend;
-        // The alpha test (Direct3D's would test the blended alpha), on the 8-bit alpha.
-        const FxU32 func = (am & SST_ALPHAFUNC) >> SST_ALPHAFUNC_SHIFT;
-        if (am & SST_ENALPHAFUNC) {
-            static const char* kCmp[] = {"false", "<", "==", "<=", ">", "!=", ">=", "true"};
-            if (func == 0) s += "  discard;\n";
-            else if (func != 7) s += std::string("  if (!(round(a * 255) ") + kCmp[func] + " target.y)) discard;\n";
+    if (k.blend) s += BlendCode(k.blend, "tex2D(dstTex, (vpos + 0.5) * target.zw)");
+    if (k.depthConst) {
+        s += "  Out o;\n  o.c = float4(c, a);\n  o.z = depthK.x;\n  return o;\n}\n";
+    } else if (k.depthOut) {
+        // The depth buffer's 16-bit value, as the Voodoo's (MAME's): Z, the iterated Z's
+        // integer part, clamped; W, from the iterated 1/w (16.32 fixed point on the chip): 0
+        // from 1/w >= 1, 0xFFFF below 2^-16, else the leading zeros of the fraction (e) and the
+        // 12 bits after its leading one, inverted, plus one. Then the bias, and clamped. It goes
+        // to the depth buffer as is (ClearDepth): coplanar passes tie as they did on the chip.
+        if (k.depthOut & DEPTH_W) {
+            s += "  float oow = i.misc.z;\n";
+            s += "  float e = clamp(floor(-log2(max(oow, 1.0 / 65536))), 0, 15);\n";
+            s += "  float f = oow * exp2(e + 1);\n";  // in [1, 2) when e is the leading zero count
+            s += "  if (f >= 2) { e -= 1; f *= 0.5; }\n  if (f < 1) { e += 1; f *= 2; }\n";
+            s += "  float dv = min(e * 4096 + 4095 - floor((f - 1) * 4096) + 1, 65535);\n";
+            s += "  dv = oow >= 1 ? 0 : (oow < 1.0 / 65536 ? 65535 : dv);\n";
+        } else {
+            s += "  float dv = clamp(floor(i.misc.w), 0, 65535);\n";
         }
-        s += "  float4 dst = tex2D(dstTex, (vpos + 0.5) * target.zw);\n";
-        auto factor = [](FxU32 f, bool src, bool alpha) -> std::string {
-            const char* one = alpha ? "1" : "float3(1, 1, 1)";
-            switch (f) {
-            case 0: return alpha ? "0" : "float3(0, 0, 0)";
-            case 1: return alpha ? "a" : "a.xxx";
-            case 2: return src ? (alpha ? "dst.a" : "dst.rgb") : (alpha ? "a" : "c");
-            case 3: return alpha ? "dst.a" : "dst.aaa";
-            case 4: return one;
-            case 5: return alpha ? "(1 - a)" : "(1 - a).xxx";
-            case 6: return src ? (alpha ? "(1 - dst.a)" : "(1 - dst.rgb)") : (alpha ? "(1 - a)" : "(1 - c)");
-            case 7: return alpha ? "(1 - dst.a)" : "(1 - dst.aaa)";
-            case 15:
-                if (src) return alpha ? "1" : "min(a, 1 - dst.a).xxx";  // ALPHA_SATURATE
-                return alpha ? "a" : "prefog";                          // PREFOG_COLOR
-            default: return alpha ? "0" : "float3(0, 0, 0)";
-            }
-        };
-        const std::string sf = factor((am & SST_RGBSRCFACT) >> SST_RGBSRCFACT_SHIFT, true, false);
-        const std::string df = factor((am & SST_RGBDSTFACT) >> SST_RGBDSTFACT_SHIFT, false, false);
-        const std::string saf = factor((am & SST_ASRCFACT) >> SST_ASRCFACT_SHIFT, true, true);
-        const std::string daf = factor((am & SST_ADSTFACT) >> SST_ADSTFACT_SHIFT, false, true);
-        s += "  c = saturate(c * " + sf + " + dst.rgb * " + df + ");\n";
-        s += "  a = saturate(a * " + saf + " + dst.a * " + daf + ");\n";
+        if (k.depthOut & DEPTH_BIAS) s += "  dv = clamp(dv + depthK.y, 0, 65535);\n";
+        // overlaybias (dd2d9's): pulled forward N steps and the depth's change over a pixel
+        // (its slope), so that rounding the surface and the overlay differently (cut into
+        // other polygons) can't fail the depth test on half its pixels in a fine hatch.
+        if (k.depthOut & DEPTH_OVERLAY)
+            s += "  dv = max(dv - depthK.z - max(abs(ddx(dv)), abs(ddy(dv))), 0);\n";
+        s += "  Out o;\n  o.c = float4(c, a);\n  o.z = (dv + 0.5) / 65536;\n  return o;\n}\n";
     }
-    if (k.depthConst) s += "  Out o;\n  o.c = float4(c, a);\n  o.z = depthK.x;\n  return o;\n}\n";
     else s += "  return float4(c, a);\n}\n";
     return s;
 }
@@ -259,7 +297,8 @@ struct KeyHash {
         size_t h = k.colorPath;
         h = h * 1000003u ^ k.fogMode;
         h = h * 1000003u ^ (k.tmuMode[0] + 7 * k.tmuMode[1]);
-        h = h * 1000003u ^ (k.tmus | k.chromaKey << 4 | k.delta0 << 5 | k.stipple << 6 | k.depthConst << 8);
+        h = h * 1000003u ^
+            (k.tmus | k.chromaKey << 4 | k.delta0 << 5 | k.stipple << 6 | k.depthConst << 8 | k.depthOut << 9);
         h = h * 1000003u ^ k.blend;
         return h;
     }
@@ -288,8 +327,8 @@ void LoadDiskCache() {
     g_disk.loaded = true;
     g_disk.path = ShaderCachePath();
     if (g_disk.path.empty()) return;
-    HANDLE h = CreateFileW(g_disk.path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = CreateFileW(g_disk.path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return;
     LARGE_INTEGER size = {};
     std::vector<char> data;
@@ -323,12 +362,13 @@ void LoadDiskCache() {
 
 void SaveToDisk(uint64_t hash, const void* code, uint32_t bytes) {
     if (g_disk.path.empty()) return;
-    HANDLE h = CreateFileW(g_disk.path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                           nullptr);
+    HANDLE h = CreateFileW(g_disk.path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return;
     std::vector<char> rec;
     LARGE_INTEGER size = {};
-    if (GetFileSizeEx(h, &size) && size.QuadPart == 0) rec.insert(rec.end(), kDiskMagic, kDiskMagic + sizeof(kDiskMagic));
+    if (GetFileSizeEx(h, &size) && size.QuadPart == 0)
+        rec.insert(rec.end(), kDiskMagic, kDiskMagic + sizeof(kDiskMagic));
     const size_t at = rec.size();
     rec.resize(at + 12 + bytes);
     memcpy(&rec[at], &hash, 8);
@@ -342,9 +382,9 @@ void SaveToDisk(uint64_t hash, const void* code, uint32_t bytes) {
 }  // namespace
 
 bool ShaderKey::operator==(const ShaderKey& o) const {
-    return colorPath == o.colorPath && fogMode == o.fogMode && tmuMode[0] == o.tmuMode[0] && tmuMode[1] == o.tmuMode[1] &&
-           tmus == o.tmus && chromaKey == o.chromaKey && delta0 == o.delta0 && stipple == o.stipple && blend == o.blend &&
-           depthConst == o.depthConst;
+    return colorPath == o.colorPath && fogMode == o.fogMode && tmuMode[0] == o.tmuMode[0] &&
+           tmuMode[1] == o.tmuMode[1] && tmus == o.tmus && chromaKey == o.chromaKey && delta0 == o.delta0 &&
+           stipple == o.stipple && blend == o.blend && depthConst == o.depthConst && depthOut == o.depthOut;
 }
 
 // The bits that select the pipeline (the rest are drawn through render states and constants).
@@ -359,8 +399,14 @@ ShaderKey MakeShaderKey(const GlideState& st, int numTmu) {
     if (r.fbzMode & SST_ENSTIPPLE) k.stipple = (r.fbzMode & SST_ENSTIPPLEPATTERN) ? 1 : 2;
     const FxU32 zc = SST_ENDEPTHBUFFER | SST_ZCOMPARE_TO_ZACOLOR;
     k.depthConst = (r.fbzMode & zc) == zc ? 1 : 0;
+    if (!k.depthConst && (r.fbzMode & SST_ENDEPTHBUFFER)) {
+        k.depthOut = (r.fbzMode & SST_WBUFFER) ? DEPTH_W : DEPTH_Z;
+        if (r.fbzMode & SST_ENZBIAS) k.depthOut |= DEPTH_BIAS;  // (not by its value: one shader for all)
+        if (IsOverlay(r)) k.depthOut |= DEPTH_OVERLAY;
+    }
     if (BlendInShader(r))
-        k.blend = r.alphaMode & (SST_ENALPHAFUNC | SST_ALPHAFUNC | SST_RGBSRCFACT | SST_RGBDSTFACT | SST_ASRCFACT | SST_ADSTFACT);
+        k.blend = r.alphaMode &
+                  (SST_ENALPHAFUNC | SST_ALPHAFUNC | SST_RGBSRCFACT | SST_RGBDSTFACT | SST_ASRCFACT | SST_ADSTFACT);
     if (r.fbzColorPath & SST_ENTEXTUREMAP) {
         const FxU32 m0 = r.tmu[0].textureMode & (SST_TCOMBINE | SST_TACOMBINE);
         k.tmuMode[0] = m0;
@@ -376,6 +422,19 @@ ShaderKey MakeShaderKey(const GlideState& st, int numTmu) {
 bool TmuActive(FxU32 textureMode) { return UsesLocal(textureMode); }
 
 // PREFOG_COLOR differs from the source color only with fog on.
+// dd2d9's overlaybias, on Glide's blend factors: no depth write, or blending that adds or
+// multiplies (the destination's factor ONE, SRC_COLOR, ONE_MINUS_SRC_COLOR or PREFOG_COLOR;
+// the source's ZERO or DST_COLOR). Ordinary alpha blending doesn't count (NFS III blends
+// everything).
+bool IsOverlay(const Regs& r) {
+    if (g_config.overlayBias <= 0 || !(r.fbzMode & SST_ENDEPTHBUFFER)) return false;
+    if (!(r.fbzMode & SST_ZAWRMASK)) return true;
+    if (!(r.alphaMode & SST_ENALPHABLEND)) return false;
+    const FxU32 src = (r.alphaMode & SST_RGBSRCFACT) >> SST_RGBSRCFACT_SHIFT;
+    const FxU32 dst = (r.alphaMode & SST_RGBDSTFACT) >> SST_RGBDSTFACT_SHIFT;
+    return dst == 4 || dst == 2 || dst == 6 || dst == 15 || src == 0 || src == 2;
+}
+
 bool BlendInShader(const Regs& r) {
     return (r.alphaMode & SST_ENALPHABLEND) && ((r.alphaMode & SST_RGBDSTFACT) >> SST_RGBDSTFACT_SHIFT) == 15 &&
            (r.fogMode & SST_ENFOGGING);
@@ -402,7 +461,8 @@ bool Bytecode(const std::string& src, UINT flags, std::vector<DWORD>* out) {
     if (!compile) return false;
     ID3DBlob* code = nullptr;
     ID3DBlob* errors = nullptr;
-    const HRESULT hr = compile(src.data(), src.size(), "gl2d9", nullptr, nullptr, "main", "ps_3_0", flags, 0, &code, &errors);
+    const HRESULT hr =
+        compile(src.data(), src.size(), "gl2d9", nullptr, nullptr, "main", "ps_3_0", flags, 0, &code, &errors);
     const bool ok = SUCCEEDED(hr) && code;
     if (ok) {
         const DWORD* words = static_cast<const DWORD*>(code->GetBufferPointer());

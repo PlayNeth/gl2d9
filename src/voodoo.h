@@ -155,7 +155,8 @@ namespace gl2d9 {
 // Glide 3's GR_TEXTURECLAMP_MIRROR_EXT (the Voodoo 3's tLOD bits).
 #define SST_LOD_TMIRRORS BIT(28)
 #define SST_LOD_TMIRRORT BIT(29)
-#define SST_TLOD_MINMAX_INT(lodmin, lodmax) ((((lodmin) << 2) << SST_LODMIN_SHIFT) | (((lodmax) << 2) << SST_LODMAX_SHIFT))
+#define SST_TLOD_MINMAX_INT(lodmin, lodmax) \
+    ((((lodmin) << 2) << SST_LODMIN_SHIFT) | (((lodmax) << 2) << SST_LODMAX_SHIFT))
 // tDetail
 #define SST_DETAIL_MAX_SHIFT 0
 #define SST_DETAIL_MAX (0xFFu << SST_DETAIL_MAX_SHIFT)

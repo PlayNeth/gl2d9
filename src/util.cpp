@@ -1,9 +1,12 @@
 // Logging and configuration.
 #include "common.h"
 
+#include <algorithm>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace gl2d9 {
 
@@ -124,11 +127,64 @@ static void Apply(const std::string& key, const std::string& rawVal, const std::
     } else if (key == "scale" || key == "resolutionscale") {
         number(1, 8, &g_config.scale);
     } else if (key == "tmumemory" || key == "texmemory") {
-        number(1, 32, &g_config.tmuMB);
+        if (v == "auto") g_config.tmuMB = 0;
+        else number(1, 32, &g_config.tmuMB);
     } else if (key == "fbmemory") {
         number(1, 16, &g_config.fbMB);
     } else if (key == "tmus") {
         number(1, 2, &g_config.tmus);
+    } else if (key == "screenshotkey") {
+        static const struct {
+            const char* name;
+            int vk;
+        } kKeys[] = {{"none", 0},      {"0", 0},          {"printscreen", VK_SNAPSHOT}, {"scrolllock", VK_SCROLL},
+                     {"pause", VK_PAUSE}, {"insert", VK_INSERT}, {"home", VK_HOME},          {"end", VK_END}};
+        bool found = false;
+        for (const auto& k : kKeys)
+            if (v == k.name) g_config.screenshotKey = k.vk, found = true;
+        int f = 0;
+        if (!found && v.size() >= 2 && v[0] == 'f' && sscanf(v.c_str() + 1, "%d", &f) == 1 && f >= 1 && f <= 12)
+            g_config.screenshotKey = VK_F1 + f - 1, found = true;
+        ok = found;
+    } else if (key == "fpslimit" || key == "fps") {
+        char* end = nullptr;
+        const long x = v == "off" ? 0 : strtol(v.c_str(), &end, 10);
+        if (end && (end == v.c_str() || *end)) ok = false;
+        else if (x < 0 || x > 1000) ok = false;
+        else g_config.fpsLimit = int(x);
+    } else if (key == "cpus") {
+        int b;
+        char* end = nullptr;
+        const long x = v == "off" || v == "all" ? 0 : ParseBool(v, &b) && !b ? 0 : strtol(v.c_str(), &end, 10);
+        if (end && (end == v.c_str() || *end)) ok = false;
+        else if (x < 0 || x > 64) ok = false;
+        else g_config.cpus = int(x);
+    } else if (key == "texfilter") {
+        if (v == "game" || v == "off" || v == "0") g_config.texLinear = false;
+        else if (v == "linear" || v == "bilinear" || v == "on" || v == "1") g_config.texLinear = true;
+        else ok = false;
+    } else if (key == "anisotropy" || key == "af") {
+        int b;
+        char* end = nullptr;
+        const long x = ParseBool(v, &b) && !b ? 0 : strtol(v.c_str(), &end, 10);
+        if (end && (end == v.c_str() || *end)) ok = false;
+        else if (x < 0 || x > 16) ok = false;
+        else g_config.anisotropy = int(x);
+    } else if (key == "overlaybias") {
+        int b;
+        char* end = nullptr;
+        const long x = ParseBool(v, &b) ? b : strtol(v.c_str(), &end, 10);
+        if (end && (end == v.c_str() || *end)) ok = false;
+        else if (x < 0 || x > 4096) ok = false;
+        else g_config.overlayBias = int(x);
+    } else if (key == "voodoolook") {
+        int b;
+        if (ParseBool(v, &b)) g_config.voodooLook = b != 0;
+        else ok = false;
+    } else if (key == "filterresolutions") {
+        int b;
+        if (ParseBool(v, &b)) g_config.filterResolutions = b != 0;
+        else ok = false;
     } else if (key == "shadercache") {
         int b;
         if (ParseBool(v, &b)) g_config.shaderCache = b != 0;
@@ -195,7 +251,8 @@ static bool LoadIni(const std::wstring& path, const std::string& exeName, bool g
 
 namespace {
 bool CanWrite(const std::wstring& path) {
-    HANDLE h = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
     CloseHandle(h);
     return true;
@@ -215,6 +272,26 @@ std::wstring ShaderCachePath() {
     if (dot != std::wstring::npos) name.resize(dot);
     const std::wstring other = dir + L"\\" + name + L".shaders";
     return CanWrite(other) ? other : std::wstring();
+}
+
+std::wstring ScreenshotPath() {
+    const std::wstring exe = ModulePath(nullptr);
+    const std::wstring dir = DirOf(exe) + L"screenshots";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::wstring name = BaseName(exe);
+    const size_t dot = name.rfind(L'.');
+    if (dot != std::wstring::npos) name.resize(dot);
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    wchar_t stamp[64];
+    swprintf(stamp, 64, L"_%04u-%02u-%02u_%02u-%02u-%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    for (int n = 0; n < 1000; n++) {
+        std::wstring p = dir + L"\\" + name + stamp;
+        if (n) p += L"_" + std::to_wstring(n);
+        p += L".bmp";
+        if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) return p;
+    }
+    return std::wstring();
 }
 
 void LoadConfig(HMODULE self) {
@@ -304,10 +381,13 @@ void LogInit() {
     if (g_iniLoaded.empty()) Log(1, "config:  none found");
     for (const auto& f : g_iniLoaded) Log(1, "config:  %s", Utf8(f).c_str());
     for (const auto& e : g_iniErrors) Log(1, "config:  %s", Utf8(e).c_str());
-    Log(1, "settings: display=%s stretch=%s filter=%s vsync=%s scale=%d d3d9=%s tmus=%d tmumemory=%d fbmemory=%d shadercache=%d log=%d",
+    Log(1,
+        "settings: display=%s stretch=%s filter=%s vsync=%s scale=%d d3d9=%s tmus=%d tmumemory=%d (0 = auto) fbmemory=%d "
+        "shadercache=%d overlaybias=%d voodoolook=%d fpslimit=%d cpus=%d texfilter=%s anisotropy=%d log=%d",
         kDisplay[g_config.display], kStretch[g_config.stretch], kFilter[g_config.filter], kVSync[g_config.vsync],
-        g_config.scale, g_config.systemD3D9 ? "system" : "game", g_config.tmus,
-        g_config.tmuMB, g_config.fbMB, int(g_config.shaderCache), g_config.log);
+        g_config.scale, g_config.systemD3D9 ? "system" : "game", g_config.tmus, g_config.tmuMB, g_config.fbMB,
+        int(g_config.shaderCache), g_config.overlayBias, int(g_config.voodooLook), g_config.fpsLimit, g_config.cpus,
+        g_config.texLinear ? "linear" : "game", g_config.anisotropy, g_config.log);
     g_crashHandler = AddVectoredExceptionHandler(0, CrashLogger);  // 0: after the handlers registered first
 }
 
@@ -426,6 +506,88 @@ void LogFlush(bool processExit) {
         g_logFile = nullptr;
     }
     LeaveCriticalSection(&g_logLock);
+}
+
+// ---------------------------------------------------------------- cpus=, fpslimit= (dd2d9's)
+
+// cpus= processors the process may run on: one logical processor per physical core (two
+// hyperthreads of one core would be about one core's worth), the first core last (it takes
+// most of the system's interrupts) when there are cores to spare. For games of the
+// single-core era whose timing breaks across cores.
+void ApplyCpus() {
+    if (g_config.cpus <= 0) return;
+    DWORD_PTR process = 0, system = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) return;
+    std::vector<DWORD_PTR> cores;  // each core's first logical processor the process may use
+    DWORD len = 0;
+    GetLogicalProcessorInformation(nullptr, &len);
+    std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> info(len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) + 1);
+    len = DWORD(info.size() * sizeof(info[0]));
+    if (GetLogicalProcessorInformation(info.data(), &len)) {
+        for (DWORD i = 0; i < len / sizeof(info[0]); i++) {
+            if (info[i].Relationship != RelationProcessorCore) continue;
+            const DWORD_PTR usable = info[i].ProcessorMask & process;
+            if (usable) cores.push_back(usable & (~usable + 1));  // its lowest bit
+        }
+    }
+    if (cores.empty())  // no topology: the logical processors themselves
+        for (unsigned bit = 0; bit < sizeof(DWORD_PTR) * 8; bit++)
+            if (process & (DWORD_PTR(1) << bit)) cores.push_back(DWORD_PTR(1) << bit);
+    if (int(cores.size()) > g_config.cpus) std::rotate(cores.begin(), cores.begin() + 1, cores.end());  // core 0 last
+    DWORD_PTR mask = 0;
+    int count = 0;
+    for (DWORD_PTR c : cores) {
+        if (count >= g_config.cpus) break;
+        mask |= c;
+        count++;
+    }
+    if (!mask || !SetProcessAffinityMask(GetCurrentProcess(), mask)) return;
+    Log(1, "cpus: the game runs on %d processor(s) (mask 0x%lx)", count, static_cast<unsigned long>(mask));
+}
+
+namespace {
+// Sleeps until QueryPerformanceCounter reaches `target`: a high-resolution waitable timer
+// (Windows 10 1803 and later) for all but the last half millisecond, which is spun; without
+// one, Sleep for all but the last ~1.5 ms. (Spinning the last 2 ms on Sleep(0) cost the game
+// its only core with cpus=1.)
+void SleepUntilQpc(int64_t target) {
+    static LARGE_INTEGER freq;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    thread_local HANDLE timer =
+        CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+    for (;;) {
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        const int64_t left = target - now.QuadPart;
+        if (left <= 0) return;
+        const double ms = double(left) * 1000.0 / double(freq.QuadPart);
+        if (timer && ms > 0.6) {
+            LARGE_INTEGER due;
+            due.QuadPart = -int64_t((ms - 0.5) * 10000.0);  // relative, in 100 ns
+            if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+                WaitForSingleObject(timer, INFINITE);
+                continue;
+            }
+        }
+        if (!timer && ms > 2.0) Sleep(DWORD(ms - 1.5));
+        else YieldProcessor();
+    }
+}
+}  // namespace
+
+// fpslimit=N: frames spaced 1/N s apart. A frame later than a whole period starts the
+// count again (no burst of frames to catch up).
+void LimitFrame() {
+    if (g_config.fpsLimit <= 0) return;
+    static int64_t next;
+    static LARGE_INTEGER freq;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    const int64_t period = freq.QuadPart / g_config.fpsLimit;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (!next || now.QuadPart > next + period) next = now.QuadPart;
+    SleepUntilQpc(next);
+    next += period;
 }
 
 }  // namespace gl2d9

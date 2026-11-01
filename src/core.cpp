@@ -130,7 +130,10 @@ bool ResolutionSize(GrScreenResolution_t res, int* w, int* h) {
 
 void CoreInit() {
     g_board.numTmu = std::clamp(g_config.tmus, 1, 2);
-    g_board.tmuMem = FxU32(std::clamp(g_config.tmuMB, 1, 32)) << 20;
+    // Auto: a Voodoo2's 4 MB per TMU for Glide 2, a Voodoo3's 16 MB for Glide 3. Glide 3 games
+    // sized for the later boards run out at 4 MB (NFS3's texture allocator returns null).
+    const int mb = g_config.tmuMB > 0 ? g_config.tmuMB : g_version == kGlide3x ? 16 : 4;
+    g_board.tmuMem = FxU32(std::clamp(mb, 1, 32)) << 20;
     for (int t = 0; t < kMaxTmu; t++) {
         if (t < g_board.numTmu) {
             if (g_texMem[t].bytes.size() != g_board.tmuMem) g_texMem[t].Resize(g_board.tmuMem);
@@ -214,6 +217,37 @@ void CoreFan(const RVtx* v, int n) {
         g_tris.push_back(Snapped(v[0]));
         g_tris.push_back(Snapped(v[i]));
         g_tris.push_back(Snapped(v[i + 1]));
+    }
+    if (!g_tris.empty()) RenderTriangles(g_tris.data(), int(g_tris.size()));
+}
+
+// Independent triangles (v[0..2], v[3..5], ...), drawn together.
+void CoreTriangleList(const RVtx* v, int n) {
+    if (!g_board.open) return;
+    g_tris.clear();
+    for (int i = 0; i + 2 < n; i += 3) {
+        g_board.trisIn++;
+        if (!Visible(v[i], v[i + 1], v[i + 2])) continue;
+        g_board.trisOut++;
+        for (int k = 0; k < 3; k++) g_tris.push_back(Snapped(v[i + k]));
+    }
+    if (!g_tris.empty()) RenderTriangles(g_tris.data(), int(g_tris.size()));
+}
+
+// A strip, its triangles culled each with the strip's alternating orientation (odd: the first
+// is the strip's odd one), drawn together.
+void CoreStrip(const RVtx* v, int n, bool odd) {
+    if (!g_board.open) return;
+    g_tris.clear();
+    for (int i = 0; i + 2 < n; i++, odd = !odd) {
+        const RVtx& a = odd ? v[i + 1] : v[i];
+        const RVtx& b = odd ? v[i] : v[i + 1];
+        g_board.trisIn++;
+        if (!Visible(a, b, v[i + 2])) continue;
+        g_board.trisOut++;
+        g_tris.push_back(Snapped(a));
+        g_tris.push_back(Snapped(b));
+        g_tris.push_back(Snapped(v[i + 2]));
     }
     if (!g_tris.empty()) RenderTriangles(g_tris.data(), int(g_tris.size()));
 }
@@ -313,6 +347,7 @@ void CoreSwap(int interval) {
     if (!g_board.open) return;
     LfbBeforeSwap();
     g_board.swaps++;
+    LimitFrame();  // (under the lock: the swap is the game's one thread at a time anyway)
     RenderSwap(interval);
     WindowPump();
 }

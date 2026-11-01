@@ -158,14 +158,6 @@ RVtx Read(const void* v) {
 // The renderer takes each TMU's own w and s, t as read above.
 void SetHints() { St().paramHints = 0x2 | 0x8 | 0x10; }
 
-// Triangles of a strip, culled each with the strip's alternating orientation.
-void Strip(const RVtx* v, int n, bool odd) {
-    for (int i = 0; i + 2 < n; i++, odd = !odd) {
-        if (odd) CoreTriangle(v[i + 1], v[i], v[i + 2]);
-        else CoreTriangle(v[i], v[i + 1], v[i + 2]);
-    }
-}
-
 // grEnable(GR_AA_ORDERED): points, lines and GR_TRIANGLES arrays antialiased (3dfx's Glide 3).
 bool g_aa = false;
 
@@ -180,7 +172,6 @@ void DrawArray(FxU32 mode, FxU32 count, const void* const* ptrs, const void* bas
     if (cont) {
         for (int i = 0; i < g_contCount; i++) g_verts.push_back(g_cont[i]);
     }
-    const size_t first = g_verts.size();
     for (FxU32 i = 0; i < count; i++) g_verts.push_back(Read(at(i)));
     RVtx* v = g_verts.data();
     const int n = int(g_verts.size());
@@ -207,7 +198,7 @@ void DrawArray(FxU32 mode, FxU32 count, const void* const* ptrs, const void* bas
     case GR_TRIANGLE_STRIP:
     case GR_TRIANGLE_STRIP_CONTINUE: {
         const bool odd = mode == GR_TRIANGLE_STRIP_CONTINUE ? g_contOdd : false;
-        Strip(v, n, odd);
+        CoreStrip(v, n, odd);
         // The parity the next triangle continues with.
         if (n >= 2) {
             g_contOdd = (odd ? 1 : 0) ^ ((n - 2) & 1);
@@ -218,14 +209,12 @@ void DrawArray(FxU32 mode, FxU32 count, const void* const* ptrs, const void* bas
         break;
     }
     case GR_TRIANGLES:
-        for (int i = 0; i + 2 < n; i += 3) {
-            if (g_aa) CoreAATriangle(v[i], v[i + 1], v[i + 2], true, true, true);
-            else CoreTriangle(v[i], v[i + 1], v[i + 2]);
-        }
+        if (!g_aa) CoreTriangleList(v, n);
+        else
+            for (int i = 0; i + 2 < n; i += 3) CoreAATriangle(v[i], v[i + 1], v[i + 2], true, true, true);
         break;
     default: break;
     }
-    (void)first;
 }
 
 void ResetLayout() {
@@ -550,11 +539,13 @@ GLAPI void grCheckForRoom(FxI32) {}
 
 // ---------------------------------------------------------------- state
 
-GLAPI void grAlphaBlendFunction(GrAlphaBlendFnc_t rs, GrAlphaBlendFnc_t rd, GrAlphaBlendFnc_t as, GrAlphaBlendFnc_t ad) {
+GLAPI void grAlphaBlendFunction(GrAlphaBlendFnc_t rs, GrAlphaBlendFnc_t rd, GrAlphaBlendFnc_t as,
+                                GrAlphaBlendFnc_t ad) {
     ENTRY("grAlphaBlendFunction");
     st::AlphaBlendFunction(rs, rd, as, ad);
 }
-GLAPI void grAlphaCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o, FxBool inv) {
+GLAPI void grAlphaCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o,
+                          FxBool inv) {
     ENTRY("grAlphaCombine");
     st::AlphaCombine(f, k, l, o, inv);
 }
@@ -582,7 +573,8 @@ GLAPI void grClipWindow(FxU32 minx, FxU32 miny, FxU32 maxx, FxU32 maxy) {
     ENTRY("grClipWindow");
     st::ClipWindow(minx, miny, maxx, maxy);
 }
-GLAPI void grColorCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o, FxBool inv) {
+GLAPI void grColorCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o,
+                          FxBool inv) {
     ENTRY("grColorCombine");
     st::ColorCombine(f, k, l, o, inv);
 }
@@ -705,7 +697,8 @@ GLAPI void grTexMultibase(GrChipID_t tmu, FxBool e) {
     ENTRY("grTexMultibase");
     st::TexMultibase(tmu, e);
 }
-GLAPI void grTexMultibaseAddress(GrChipID_t tmu, GrTexBaseRange_t range, FxU32 start, FxU32 evenOdd, const GrTexInfo* info) {
+GLAPI void grTexMultibaseAddress(GrChipID_t tmu, GrTexBaseRange_t range, FxU32 start, FxU32 evenOdd,
+                                 const GrTexInfo* info) {
     ENTRY("grTexMultibaseAddress");
     if (!info || range > G3_TEXBASE_256) return;
     const GrTexInfo i2 = Info2(info);
@@ -721,7 +714,8 @@ GLAPI FxU32 grTexCalcMemRequired(GrLOD_t small, GrLOD_t large, GrAspectRatio_t a
 }
 GLAPI FxU32 grTexTextureMemRequired(FxU32 evenOdd, const GrTexInfo* info) {
     if (!info) return 0;
-    return TexMemRequired(Lod2(info->smallLod), Lod2(info->largeLod), Aspect2(info->aspectRatio), info->format, evenOdd);
+    return TexMemRequired(Lod2(info->smallLod), Lod2(info->largeLod), Aspect2(info->aspectRatio), info->format,
+                          evenOdd);
 }
 GLAPI void grTexDownloadMipMap(GrChipID_t tmu, FxU32 start, FxU32 evenOdd, const GrTexInfo* info) {
     ENTRY("grTexDownloadMipMap");
@@ -757,8 +751,8 @@ GLAPI void grTexDownloadTablePartial(GrTexTable_t type, const void* data, int st
 
 // ---------------------------------------------------------------- the linear frame buffer
 
-GLAPI FxBool grLfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t mode, GrOriginLocation_t origin, FxBool pipeline,
-                       GrLfbInfo_t* info) {
+GLAPI FxBool grLfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t mode, GrOriginLocation_t origin,
+                       FxBool pipeline, GrLfbInfo_t* info) {
     ENTRY("grLfbLock");
     return LfbLock(type, buffer, mode, origin, pipeline, info);
 }

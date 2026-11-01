@@ -1,5 +1,5 @@
 project('gl2d9', 'cpp',
-  version : '0.1.0',
+  version : '1.0.0',
   default_options : ['cpp_std=c++17', 'warning_level=2', 'buildtype=release', 'b_ndebug=if-release'])
 
 cpp = meson.get_compiler('cpp')

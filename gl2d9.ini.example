@@ -1,0 +1,40 @@
+; gl2d9 1.0.0 - 3dfx Glide (2.1 / 2.x / 3.x) on Direct3D 9. Every value here is the default.
+; Put the DLL the game uses (glide.dll, glide2x.dll or glide3x.dll) and this file next to
+; the game's executable. A [game.exe] section overrides these for that game only.
+[gl2d9]
+; borderless: covers the primary monitor, picture scaled | window | switch: real mode change
+display=borderless
+; aspect | fill | integer
+stretch=aspect
+; scaling of the finished frame: point | linear | sharp (crisp pixels, smooth only at their edges)
+filter=linear
+; game | linear: textures the game draws unfiltered (blocky) smoothed; cut-outs keep theirs
+texfilter=game
+; 0 off | 2 | 4 | 8 | 16: anisotropic filtering, sharper roads and floors at grazing angles
+anisotropy=0
+; 1: the picture dithered to 16 bits, as a Voodoo showed it (4x4 ordered dither)
+voodoolook=0
+; internal resolution multiplier (1-8): 2 renders 640x480 games at 1280x960
+scale=1
+; auto | on | off
+vsync=auto
+; texture memory per TMU (MB, up to 32, auto = 4 for Glide 2, 16 for Glide 3) and TMU count reported to the game
+tmumemory=auto
+tmus=2
+; frames per second at most (0: off), for games that run too fast
+fpslimit=0
+; processors the game runs on: 1, as the single-core PCs of the era (early NFS and others break on more) | 0: all
+cpus=1
+; saves the frame shown to screenshots\ next to the game: f1-f12 | printscreen | scrolllock | pause | none
+screenshotkey=f12
+; resolution lists a game carries itself (Unreal engine's GlideDrv): only the monitor's modes
+filterresolutions=1
+; light maps, headlights and decals (passes that add, multiply or don't write depth) pulled forward
+; one depth step and a pixel's slope, so they don't z-fight with the surface: 0 off | 1 | more steps
+overlaybias=1
+; compiled shaders kept in gl2d9.shaders next to the DLL (no compile stutter next time)
+shadercache=1
+; system: Windows' own d3d9.dll | game: the one in the game's folder (DXVK, say)
+d3d9=system
+; 0: off | 1: gl2d9.log next to the game (settings, device, errors; for bug reports) | 2: every Glide call (slow)
+log=0

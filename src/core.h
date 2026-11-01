@@ -21,6 +21,8 @@ void CoreTriangle(const RVtx& a, const RVtx& b, const RVtx& c);
 void CorePoint(const RVtx& p);
 void CoreLine(const RVtx& a, const RVtx& b);
 void CoreFan(const RVtx* v, int n);  // a convex polygon (a fan from v[0])
+void CoreTriangleList(const RVtx* v, int n);  // independent triangles
+void CoreStrip(const RVtx* v, int n, bool odd);
 // Antialiased (Glide's grAADraw*): with alpha-blended fringes on the edges.
 void CoreAATriangle(const RVtx& a, const RVtx& b, const RVtx& c, bool ab, bool bc, bool ca);
 void CoreAAFan(const RVtx* v, int n);  // every outline edge

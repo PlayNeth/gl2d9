@@ -9,6 +9,7 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void* reserved) {
         InitializeCriticalSection(&g_lock);
         LoadConfig(inst);
         LogInit();
+        ApplyCpus();
     }
     if (reason == DLL_PROCESS_DETACH) {
         if (!reserved) {  // unloaded while the process goes on: nothing may point into it
