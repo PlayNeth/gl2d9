@@ -24,6 +24,9 @@
   row's span and where the pattern is at its first pixel. Pixels written through the pixel
   pipeline by the frame buffer step it too. The pattern mode was already exact. New test
   `tests/glide3/stiprot` (the result against a model of the chip, both origins).
+- **`install-gl2d9.sh`** for Linux: installs the three DLLs into a Wine or Proton prefix's
+  32-bit system folder (keeping any other Glide DLLs there as `*.pre-gl2d9`) and creates
+  `C:\windows\gl2d9.ini`; `uninstall` removes them and puts back what it kept.
 - Tested: the Glide 2 and Glide 3 SDK test programs and `tests/` (pixel-identical to 1.0.0
   with the same settings), High Stakes' sequence (640x480, close, shutdown, 1600x1200 on a
   1920x1080 screen, with another subclass on the window) and a full-width frame buffer write

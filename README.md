@@ -30,11 +30,23 @@ gl2d9 is a reimplementation of 3dfx's Glide: `glide.dll`, `glide2x.dll` and `gli
 
 ## Installing
 
+### Windows
+
 1. Copy the DLL the game loads (`glide.dll`, `glide2x.dll` or `glide3x.dll`) next to the game's exe. Games that look for Glide in the Windows folder find it next to the exe first.
 2. To change a setting, also copy `gl2d9.ini` there. Without one, every setting is its default.
 3. Start the game.
 
-The same goes for Linux: put the DLL next to the game's exe in its Wine or Proton prefix.
+### Linux (Wine / Proton)
+
+Either install it into the prefix the game uses, from the folder you unzipped:
+
+```sh
+WINEPREFIX=~/Games/foo ./install-gl2d9.sh install
+```
+
+That copies all three DLLs into the prefix's 32-bit system folder (`syswow64` in a 64-bit prefix, `system32` in a 32-bit one), so every Glide game in the prefix uses gl2d9, and creates `C:\windows\gl2d9.ini` if there's none. Wine has no Glide of its own, so no DLL override is needed. Glide DLLs already there (nGlide or dgVoodoo, say) are kept as `*.pre-gl2d9`. A Glide DLL next to a game's exe is still loaded first: remove it for that game to use gl2d9. For Proton, the prefix is the game's `compatdata/<appid>/pfx` folder.
+
+Or, for one game: put the DLL next to the game's exe, as on Windows.
 
 ### Checking it works
 
@@ -42,7 +54,9 @@ Set `log=1` in `gl2d9.ini` and start the game. `gl2d9.log` appears next to the g
 
 ## Uninstalling
 
-Delete the Glide DLL you copied, and `gl2d9.ini`, `gl2d9.log` and `gl2d9.shaders` if they're there. Screenshots stay in `screenshots\` next to the game.
+- **Windows:** delete the Glide DLL you copied from the game's folder.
+- **Wine / Proton:** `WINEPREFIX=~/Games/foo ./install-gl2d9.sh uninstall` removes gl2d9's DLLs from the prefix and puts back any it kept. It keeps `gl2d9.ini`.
+- You can also delete `gl2d9.ini`, `gl2d9.log` and `gl2d9.shaders`. Screenshots stay in `screenshots\` next to the game.
 
 ---
 
@@ -146,13 +160,14 @@ A `[gl2d9]` section applies to every game, and a `[game.exe]` section overrides 
 |---|---|
 | `glide.dll`, `glide2x.dll`, `glide3x.dll` | gl2d9 itself: the one the game loads. |
 | `gl2d9.ini` | Settings (see [Settings](#settings)). |
+| `install-gl2d9.sh` | Linux: installs gl2d9 into a Wine or Proton prefix, or removes it. |
 | `gl2d9.log` | Next to the game's exe, with `log=1` or more. Send it with any bug report. |
 | `gl2d9.shaders` | The compiled shaders, next to the DLL (`shadercache`). Safe to delete. |
 | `screenshots\` | Screenshots (24-bit BMP), next to the game's exe. |
 
 ## Troubleshooting
 
-- **Nothing changes, and `log=1` writes no `gl2d9.log`:** the game isn't loading gl2d9. Check that the right DLL for the game is next to its exe.
+- **Nothing changes, and `log=1` writes no `gl2d9.log`:** the game isn't loading gl2d9. Check that the right DLL for the game is next to its exe (or, under Wine, run `install-gl2d9.sh install` for the game's prefix).
 - **The game doesn't start on Windows, and the log says Windows refused a Direct3D 9 device:** the game has Windows' own DirectDraw loaded. Put [dd2d9](https://github.com/PlayNeth/dd2d9) next to it as `ddraw.dll`.
 - **The game runs too fast, or its timing is off:** keep `cpus=1`, or set `fpslimit`.
 - **Hatched light maps, headlights or decals on the road:** raise `overlaybias`.
