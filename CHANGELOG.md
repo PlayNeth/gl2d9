@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.0.1
+- **No crash when a game opens Glide again on its window** after something else subclassed
+  that window (dd2d9, for the game's DirectDraw menus, or the game itself). gl2d9 can't
+  unhook from under the other subclass, so it stays in the window's chain; opening again,
+  it subclassed a second time, and the window's messages went round gl2d9, the other, gl2d9
+  again, until the stack overflowed, with nothing in the log. NFS High Stakes crashed going
+  from its 640x480 menus to a 1600x1200 race, and NFS Porsche Unleashed coming back from
+  Alt+Tab (both close and reopen Glide on the same window). gl2d9 now remembers a window it
+  is still hooked into and takes that hook back. Should window procedures ever call each
+  other round a loop anyway, the loop is logged once and broken, and a stack overflow is
+  logged in one line. New test `tests/glide3/reopen`.
+- **Frame buffer writes wider than 1024 pixels.** A lock always gave the Voodoo's 1024-pixel
+  rows (a 2048-byte stride); the Glide 3 modes wider than that (1280 and up) didn't fit, and
+  each row written ran into the next one: NFS Porsche Unleashed's loading screens at
+  1600x1200 came out in pieces (the middle and bits of the edges). Those modes get
+  2048-pixel rows now; up to 1024 wide nothing changes. New test `tests/glide3/lfbwide`.
+- **Stipple rotate mode, exact.** In this mode the Voodoo steps through the 32-bit pattern one
+  bit per pixel it reaches, row by row and triangle to triangle, starting over when the
+  pattern is written; 1.0.0 approximated it with a diagonal, as a GPU draws pixels in
+  parallel. The CPU now walks each triangle's rows with the Voodoo's own rules (MAME's: vertices
+  snapped to 1/16 pixel, its rounding, the clip window) and hands the shader a table: each
+  row's span and where the pattern is at its first pixel. Pixels written through the pixel
+  pipeline by the frame buffer step it too. The pattern mode was already exact. New test
+  `tests/glide3/stiprot` (the result against a model of the chip, both origins).
+- Tested: the Glide 2 and Glide 3 SDK test programs and `tests/` (pixel-identical to 1.0.0
+  with the same settings), High Stakes' sequence (640x480, close, shutdown, 1600x1200 on a
+  1920x1080 screen, with another subclass on the window) and a full-width frame buffer write
+  at 1600x1200 under Wine.
+
 ## 1.0.0
 The first release: Glide 2.1 (`glide.dll`), 2.x (`glide2x.dll`) and 3.x
 (`glide3x.dll`) on Direct3D 9, for Windows and for Linux under Wine (its own

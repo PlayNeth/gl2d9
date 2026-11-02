@@ -54,7 +54,7 @@ Delete the Glide DLL you copied, and `gl2d9.ini`, `gl2d9.log` and `gl2d9.shaders
 - **Depth as the Voodoo stored it:** the shader writes the 16-bit value the chip would, Z's integer part or W in the Voodoo's floating format, with the depth bias in the chip's own units. Coplanar passes tie the way they did on the card.
 - **Texture memory emulated byte for byte:** downloads go into each TMU's memory as on the card. Textures are decoded from it when drawn (SSE2 for the 16-bit formats) and cached until the bytes under them change: every format, NCC tables, palettes, multibase and split (two-TMU trilinear) textures, mirroring.
 - **The linear frame buffer both ways:** reads come from the GPU at the game's resolution and are reused while nothing has been drawn. Writes take every format (565, 555, 1555, 888, 8888, depth and alpha), directly or through the pixel pipeline, and RLE16 region writes.
-- **Glide's own anti-aliasing** (`grAADrawTriangle` and the rest, Glide 3's `GR_AA_ORDERED`), `guMP` multipass, stipple patterns, `gu3df` texture files and the Glide 2 utility library.
+- **Glide's own anti-aliasing** (`grAADrawTriangle` and the rest, Glide 3's `GR_AA_ORDERED`), `guMP` multipass, stipple (pattern and rotate modes, both exact: rotate's pixel order is worked out on the CPU the way the Voodoo rasterizes), `gu3df` texture files and the Glide 2 utility library.
 
 ### Display
 
@@ -82,8 +82,7 @@ Delete the Glide DLL you copied, and `gl2d9.ini`, `gl2d9.log` and `gl2d9.shaders
 
 ### Not implemented
 
-- **Stipple's rotate mode** is approximated: the chip stepped through the pattern per pixel drawn, in drawing order, and a GPU draws in parallel. The pattern mode is exact.
-- **Multisample anti-aliasing.**
+- **Multisample anti-aliasing.** `scale=2` or more gives a similar result: the picture is drawn larger and shrunk to the screen.
 
 ---
 

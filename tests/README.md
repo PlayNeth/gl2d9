@@ -30,6 +30,9 @@ Glide 3 (`glide3x.dll`):
 | Program | What it checks | Right result |
 |---|---|---|
 | `feat3` | pattern stipple; a mirrored texture; `PREFOG_COLOR` blending | red stripes swapping every two rows; a triangle wave; dark green (dark blue is wrong) |
+| `lfbwide` | frame buffer writes at 1600x1200, wider than the Voodoo's 1024-pixel rows (NFS Porsche Unleashed's loading screens) | prints reds `1 17 29`; a smooth red ramp over the whole width |
+| `stiprot` | stipple rotate mode against a model of the Voodoo's rasterizer, clip window, both origins | prints a handful differing (edge pixels Direct3D misses), not thousands, twice |
+| `reopen` | reopening on the game's window after another subclass took it (NFS High Stakes with dd2d9), at 1600x1200 | prints `open 1600` and `done`, a green triangle |
 
 The 3dfx SDK's own test programs (`glide2x/cvg/glide/tests`, `glide3x/cvg/glide3/tests` in the
 Glide tree) are the rest of the regression set.

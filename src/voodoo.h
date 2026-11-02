@@ -229,6 +229,7 @@ struct Board {
     GrColorFormat_t colorFormat = GR_COLORFORMAT_ARGB;
     int numColorBuffers = 2, numAuxBuffers = 1;
     HWND hwnd = nullptr;        // the window the screen is shown in
+    unsigned stippleWrites = 0;  // writes to the stipple register (rotate mode starts over at each)
     bool ownWindow = false;     // ... made by gl2d9 (none given, none active)
     GrErrorCallbackFnc_t errorCallback = nullptr;
     // NCC tables and palette as downloaded to each TMU (grTexDownloadTable).

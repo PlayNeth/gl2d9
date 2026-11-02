@@ -140,6 +140,7 @@ std::string Generate(const ShaderKey& k) {
     s += "float4 detailK0 : register(c6);\nfloat4 detailK1 : register(c7);\nfloat4 delta0 : register(c8);\n";
     s += "float4 stipple : register(c9);\nfloat4 target : register(c10);\nfloat4 depthK : register(c11);\n";
     s += "sampler2D dstTex : register(s3);\n";
+    if (k.stipple == 2) s += "sampler2D stipTab : register(s4);\nfloat4 stipRows : register(c12);\n";
     s += "struct In { float4 col : TEXCOORD0; float4 st0 : TEXCOORD1; float4 st1 : TEXCOORD2; float4 misc : TEXCOORD3; "
          "};\n";
     s += "struct Out { float4 c : COLOR; float z : DEPTH; };\n";
@@ -156,7 +157,16 @@ std::string Generate(const ShaderKey& k) {
             s += "  float sbyte = dot(stipple, float4(fmod(px.y, 4) == float4(0, 1, 2, 3)));\n";
             s += "  float sbit = 7 - fmod(px.x, 8);\n";
         } else {
-            s += "  float sidx = 31 - fmod(px.x + px.y, 32);\n";
+            // Rotate mode, exact (render.cpp's StippleRows): the CPU walked the triangle's rows as
+            // the Voodoo rasterizes them; each row's span and the register's position at its
+            // first pixel are in the table (s4), the triangle's first entry and first scanline
+            // in st0.w and st1.w. Pixels outside the Voodoo's span aren't drawn (its edges).
+            s += "  float scan = lerp(px.y, stipRows.x - px.y, stipRows.y);\n";
+            s += "  float idx = floor(i.st0.w + 0.5) + scan - floor(i.st1.w + 0.5);\n";
+            s += "  float4 row = tex2D(stipTab, (float2(fmod(idx, 2048), floor(idx / 2048)) + 0.5) * stipRows.zw);\n";
+            s += "  if (px.x < row.x || px.x >= row.y) discard;\n";
+            s += "  float sidx = row.z + row.w * (px.x - row.x);\n";  // (z: the first pixel's bit, w: its step)
+            s += "  sidx -= 32 * floor(sidx / 32);\n";
             s += "  float sbyte = dot(stipple, float4(floor(sidx / 8) == float4(0, 1, 2, 3)));\n";
             s += "  float sbit = fmod(sidx, 8);\n";
         }

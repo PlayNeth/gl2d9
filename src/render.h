@@ -18,6 +18,8 @@ bool RenderOpen(HWND hwnd);  // the device and the buffers, at g_board.screenW x
 void RenderClose();
 bool RenderReady();
 // Draws triangles (n vertices, three each), already culled and in drawing order.
+// Stipple rotate mode: pixels the pipeline wrote through the frame buffer turn the register too.
+void RenderStippleAdvance(unsigned pixels);
 void RenderTriangles(const RVtx* v, int n);
 // grBufferClear: the draw buffer within the clip window, as the write masks allow.
 void RenderClear(FxU32 argb, FxU8 alpha, FxU16 depth);

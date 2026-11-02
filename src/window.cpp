@@ -160,10 +160,31 @@ void Activate(bool active) {
     }
 }
 
-LRESULT CallOrig(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    if (!g_w.orig) return g_w.unicode ? DefWindowProcW(h, msg, wp, lp) : DefWindowProcA(h, msg, wp, lp);
-    return g_w.unicode ? CallWindowProcW(g_w.orig, h, msg, wp, lp) : CallWindowProcA(g_w.orig, h, msg, wp, lp);
+// Windows gl2d9 couldn't unhook (something subclassed them after it, dd2d9 for a game's
+// DirectDraw menus): HookProc stays in their chains, passing their messages to the procedure
+// it replaced. Opened again on one, gl2d9 takes that hook back rather than subclassing again:
+// a second HookProc, below the other subclass, would call it, which calls the first HookProc,
+// and so on (NFS High Stakes, 640x480 menus then a 1600x1200 race, with dd2d9: the stack
+// overflowed at once, nothing logged).
+struct StaleHook {
+    HWND hwnd;
+    WNDPROC orig;
+    bool unicode;
+};
+StaleHook g_stale[8];
+
+StaleHook* FindStale(HWND h) {
+    for (StaleHook& e : g_stale)
+        if (e.hwnd && e.hwnd == h) return &e;
+    return nullptr;
 }
+
+LRESULT CallProc(WNDPROC orig, bool unicode, HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (!orig) return unicode ? DefWindowProcW(h, msg, wp, lp) : DefWindowProcA(h, msg, wp, lp);
+    return unicode ? CallWindowProcW(orig, h, msg, wp, lp) : CallWindowProcA(orig, h, msg, wp, lp);
+}
+
+LRESULT CallOrig(HWND h, UINT msg, WPARAM wp, LPARAM lp) { return CallProc(g_w.orig, g_w.unicode, h, msg, wp, lp); }
 
 LONG_PTR GetProc(HWND h, bool unicode) {
     return unicode ? GetWindowLongPtrW(h, GWLP_WNDPROC) : GetWindowLongPtrA(h, GWLP_WNDPROC);
@@ -172,8 +193,39 @@ LONG_PTR SetProc(HWND h, bool unicode, LONG_PTR proc) {
     return unicode ? SetWindowLongPtrW(h, GWLP_WNDPROC, proc) : SetWindowLongPtrA(h, GWLP_WNDPROC, proc);
 }
 
+LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp);
+
+// The window procedure gl2d9 puts in front of the game's. Nested more than 200 deep on one
+// thread it can only be calling itself round a loop of subclasses (two HookProcs in one chain,
+// which StaleHook prevents): logged once and broken there, rather than the stack overflowing
+// with nothing logged.
 LRESULT CALLBACK HookProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    if (h != g_w.hwnd) return CallOrig(h, msg, wp, lp);
+    static thread_local int depth;
+    if (depth >= 200) {
+        static LONG logged;
+        if (InterlockedExchange(&logged, 1) == 0)
+            GL_LOG("window %p: its window procedures call each other round a loop (message 0x%x): broken there",
+                   static_cast<void*>(h), msg);
+        return IsWindowUnicode(h) ? DefWindowProcW(h, msg, wp, lp) : DefWindowProcA(h, msg, wp, lp);
+    }
+    depth++;
+    const LRESULT r = HookProcBody(h, msg, wp, lp);
+    depth--;
+    return r;
+}
+
+LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (h != g_w.hwnd || !g_w.hooked) {
+        // A window gl2d9 is no longer open on, still in its chain: its own procedure.
+        if (StaleHook* e = FindStale(h)) {
+            const WNDPROC orig = e->orig;
+            const bool unicode = e->unicode;
+            if (msg == WM_NCDESTROY) *e = StaleHook{};
+            return CallProc(orig, unicode, h, msg, wp, lp);
+        }
+        if (h == g_w.hwnd) return CallOrig(h, msg, wp, lp);
+        return IsWindowUnicode(h) ? DefWindowProcW(h, msg, wp, lp) : DefWindowProcA(h, msg, wp, lp);
+    }
     switch (msg) {
     case WM_SETCURSOR:
         // No Windows cursor over the picture: the Voodoo's output never had one (a game draws
@@ -283,6 +335,14 @@ void Hook() {
         pinned = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                                     reinterpret_cast<LPCWSTR>(&HookProc), &self) != FALSE;
     }
+    if (StaleHook* e = FindStale(g_w.hwnd)) {  // still in its chain from before: taken back
+        g_w.unicode = e->unicode;
+        g_w.orig = e->orig;
+        g_w.hooked = true;
+        *e = StaleHook{};
+        GL_LOG("window %p: still hooked from before (something subclassed it since)", static_cast<void*>(g_w.hwnd));
+        return;
+    }
     g_w.unicode = IsWindowUnicode(g_w.hwnd) != FALSE;
     g_w.orig = reinterpret_cast<WNDPROC>(GetProc(g_w.hwnd, g_w.unicode));
     const LONG_PTR prev = SetProc(g_w.hwnd, g_w.unicode, reinterpret_cast<LONG_PTR>(HookProc));
@@ -296,11 +356,17 @@ void Hook() {
 
 void Unhook() {
     if (!g_w.hooked || !g_w.hwnd || !IsWindow(g_w.hwnd)) return;
-    // Something subclassed the window after gl2d9: it stays in the chain, passing messages on.
-    if (GetProc(g_w.hwnd, g_w.unicode) == reinterpret_cast<LONG_PTR>(HookProc))
+    // Something subclassed the window after gl2d9: it stays in the chain, passing messages on,
+    // and is remembered (StaleHook) for gl2d9 opening on it again.
+    if (GetProc(g_w.hwnd, g_w.unicode) == reinterpret_cast<LONG_PTR>(HookProc)) {
         SetProc(g_w.hwnd, g_w.unicode, reinterpret_cast<LONG_PTR>(g_w.orig));
-    else
-        return;
+    } else {
+        StaleHook* e = FindStale(g_w.hwnd);
+        for (StaleHook& s : g_stale)
+            if (!e && (!s.hwnd || !IsWindow(s.hwnd))) e = &s;
+        if (e) *e = StaleHook{g_w.hwnd, g_w.orig, g_w.unicode};
+        else GL_LOG("window %p: left hooked, no room to remember it", static_cast<void*>(g_w.hwnd));
+    }
     g_w.hooked = false;
 }
 

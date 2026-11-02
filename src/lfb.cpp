@@ -13,10 +13,14 @@ namespace gl2d9 {
 
 namespace {
 
-constexpr int kStridePixels = 1024;  // the Voodoo's frame buffer rows (gc->fbStride)
+// The frame buffer rows a lock gives (gc->fbStride): the Voodoo's 1024 pixels, and 2048 for
+// the wider modes of Glide 3 (1280 and up), whose rows 1024 can't hold: written at a 2048-byte
+// stride, each 1600-pixel row ran into the next one (NFS Porsche Unleashed's loading screens
+// at 1600x1200 came out in pieces).
+int StridePixels() { return g_board.screenW > 1024 ? 2048 : 1024; }
 
 struct LfbState {
-    FxU8* mem = nullptr;  // kStridePixels * 4 bytes a row (room for the 32-bit modes)
+    FxU8* mem = nullptr;  // StridePixels() * 4 bytes a row (room for the 32-bit modes)
     size_t size = 0;
     int readBuffer = -1, writeBuffer = -1;  // locked buffers (-1: none)
     GrOriginLocation_t readOrigin = GR_ORIGIN_UPPER_LEFT, writeOrigin = GR_ORIGIN_UPPER_LEFT;
@@ -30,7 +34,7 @@ struct LfbState {
 LfbState g_l;
 
 bool EnsureMemory() {
-    const size_t need = size_t(kStridePixels) * 4 * size_t(std::max(g_board.screenH, 1) + 1);
+    const size_t need = size_t(StridePixels()) * 4 * size_t(std::max(g_board.screenH, 1) + 1);
     if (g_l.mem && g_l.size >= need) return true;
     if (g_l.mem) VirtualFree(g_l.mem, 0, MEM_RELEASE);
     g_l.mem = static_cast<FxU8*>(VirtualAlloc(nullptr, need, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
@@ -135,7 +139,7 @@ void Commit() {
     if (g_l.writeBuffer < 0 || !g_l.mem || g_l.snapshot.empty()) return;
     const int W = g_board.screenW, H = g_board.screenH;
     const int bytes = PixelBytes(g_l.writeMode);
-    const size_t stride = size_t(kStridePixels) * bytes;
+    const size_t stride = size_t(StridePixels()) * bytes;
     // The rectangle of changed pixels.
     int x0 = W, y0 = H, x1 = -1, y1 = -1;
     for (int y = 0; y < H; y++) {
@@ -179,6 +183,11 @@ void Commit() {
             g_l.mask[k] = 1;
         }
     }
+    if (g_l.pipeline) {  // (stipple rotate mode: the register turns for each pixel written)
+        unsigned n = 0;
+        for (FxU8 m : g_l.mask) n += m;
+        RenderStippleAdvance(n);
+    }
     const int sy = flip ? H - 1 - y1 : y0;
     RenderWritePixels(g_l.writeBuffer, x0, sy, w, h, color ? g_l.pixels.data() : nullptr,
                       depth ? g_l.aux.data() : nullptr, g_l.mask.data(), g_l.pipeline);
@@ -188,7 +197,7 @@ void Commit() {
 void FillForWrite() {
     const int W = g_board.screenW, H = g_board.screenH;
     const int bytes = PixelBytes(g_l.writeMode);
-    const size_t stride = size_t(kStridePixels) * bytes;
+    const size_t stride = size_t(StridePixels()) * bytes;
     memset(g_l.mem, 0, stride * H);
     const bool flip = g_l.writeOrigin == GR_ORIGIN_LOWER_LEFT;
     const bool color = IsColorBuffer(g_l.writeBuffer);
@@ -230,17 +239,17 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
         // What a write lock changed so far is in the buffer first.
         Commit();
         const int W = g_board.screenW, H = g_board.screenH;
-        const size_t stride = size_t(kStridePixels) * 2;
+        const size_t stride = size_t(StridePixels()) * 2;
         FxU16* m = reinterpret_cast<FxU16*>(g_l.mem);
         memset(g_l.mem, 0, stride * H);
         if (IsColorBuffer(buffer) && RenderReadBuffer(buffer, &g_l.pixels)) {
             for (int y = 0; y < H; y++) {
                 const FxU32* src = g_l.pixels.data() + size_t(origin == GR_ORIGIN_LOWER_LEFT ? H - 1 - y : y) * W;
-                pix::RowTo565(src, m + size_t(y) * kStridePixels, size_t(W));
+                pix::RowTo565(src, m + size_t(y) * StridePixels(), size_t(W));
             }
         } else if (!IsColorBuffer(buffer) && RenderReadAux(&g_l.aux)) {
             for (int y = 0; y < H; y++)
-                memcpy(m + size_t(y) * kStridePixels,
+                memcpy(m + size_t(y) * StridePixels(),
                        g_l.aux.data() + size_t(origin == GR_ORIGIN_LOWER_LEFT ? H - 1 - y : y) * W, size_t(W) * 2);
         }
         if (g_l.writeBuffer >= 0) {
@@ -249,7 +258,7 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
         }
         g_l.readBuffer = buffer;
         g_l.readOrigin = origin;
-        info->strideInBytes = kStridePixels * 2;
+        info->strideInBytes = StridePixels() * 2;
         info->origin = origin;
         info->lfbPtr = g_l.mem;
         info->writeMode = GR_LFBWRITEMODE_565;
@@ -275,7 +284,7 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
     if (g_l.readBuffer >= 0 && PixelBytes(writeMode) == 2) {
         // Read-locked too: the memory already holds the 16-bit pixels the game may be
         // changing in place (as one address range). Compared with what it holds now.
-        const size_t n = size_t(kStridePixels) * 2 * g_board.screenH;
+        const size_t n = size_t(StridePixels()) * 2 * g_board.screenH;
         g_l.snapshot.assign(g_l.mem, g_l.mem + n);
     } else {
         FillForWrite();
@@ -285,7 +294,7 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
     if (origin) m |= SST_LFB_YORIGIN;
     if (pixelPipeline) m |= SST_LFB_ENPIXPIPE;
     St().r.lfbMode = m;
-    info->strideInBytes = FxU32(kStridePixels * PixelBytes(writeMode));
+    info->strideInBytes = FxU32(StridePixels() * PixelBytes(writeMode));
     info->origin = origin;
     info->lfbPtr = g_l.mem;
     info->writeMode = writeMode;

@@ -54,6 +54,7 @@ enum {
     kPsStipple,  // the pattern's four bytes (y & 3 selects one)
     kPsTarget,   // x: 1 / scale, y: the alpha test's reference (0..255), zw: 1 / the target's size
     kPsDepth,    // x: the depth of zaColor (compare to bias), as drawn; y: the depth bias; z: overlaybias
+    kPsStippleRows,  // rotate mode's row table (s4): x: screen height - 1, y: 1 if Y flipped, zw: 1 / its size
 };
 
 }  // namespace gl2d9

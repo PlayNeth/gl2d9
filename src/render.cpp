@@ -91,6 +91,15 @@ struct Renderer {
     IDirect3DPixelShader9* presentPs = nullptr;
     IDirect3DPixelShader9* ditherPs = nullptr;  // voodoolook: the frame to 565, dithered
     IDirect3DTexture9* look = nullptr;          // and where it goes
+    // Stipple rotate mode (StippleRows): the batch's rows, four floats each (start, stop, the
+    // first pixel's bit, its step), the texture they go to (2048 rows a line), and the register's
+    // position: pixels counted since it was last written.
+    std::vector<float> stipRows;
+    IDirect3DTexture9* stipTex = nullptr;
+    int stipTexH = 0;
+    FxU32 stipCount = 0;
+    unsigned stipWrites = ~0u;
+    FxU32 stipPattern = 0;
     IDirect3DPixelShader9* clearPs = nullptr;
     IDirect3DPixelShader9* auxReadPs = nullptr;
     IDirect3DPixelShader9* copyPs = nullptr;
@@ -390,6 +399,8 @@ void ReleaseTargets() {
     if (g_r.dstCopy) g_r.dstCopy->Release(), g_r.dstCopy = nullptr;
     if (g_r.readSmall) g_r.readSmall->Release(), g_r.readSmall = nullptr;
     if (g_r.look) g_r.look->Release(), g_r.look = nullptr;
+    if (g_r.stipTex) g_r.stipTex->Release(), g_r.stipTex = nullptr;
+    g_r.stipTexH = 0;
     if (g_r.readSmallSys) g_r.readSmallSys->Release(), g_r.readSmallSys = nullptr;
     g_r.readSurf = nullptr;
     Dirty();
@@ -1024,13 +1035,48 @@ bool RenderReady() { return g_r.dev && g_r.color[0]; }
 
 // ---------------------------------------------------------------- drawing
 
+namespace {
+void PointSampler(int stage);
+
+// The batch's stipple rows into their texture (s4), 2048 a line, and where it is (c12).
+void UploadStippleRows() {
+    IDirect3DDevice9* d = g_r.dev;
+    const size_t rows = g_r.stipRows.size() / 4;
+    const int h = int((rows + 2047) / 2048);
+    if (g_r.stipTex && g_r.stipTexH < h) g_r.stipTex->Release(), g_r.stipTex = nullptr;
+    if (!g_r.stipTex) {
+        const int th = std::max(h, 16);
+        if (FAILED(d->CreateTexture(2048, th, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &g_r.stipTex,
+                                    nullptr))) {
+            g_r.stipTex = nullptr;
+            return;
+        }
+        g_r.stipTexH = th;
+    }
+    D3DLOCKED_RECT lr;
+    if (FAILED(g_r.stipTex->LockRect(0, &lr, nullptr, D3DLOCK_DISCARD))) return;
+    for (int y = 0; y < h; y++) {
+        const size_t first = size_t(y) * 2048, n = std::min<size_t>(2048, rows - first);
+        memcpy(static_cast<uint8_t*>(lr.pBits) + size_t(y) * lr.Pitch, &g_r.stipRows[first * 4], n * 16);
+    }
+    g_r.stipTex->UnlockRect(0);
+    d->SetTexture(4, g_r.stipTex);
+    PointSampler(4);
+    const float k[4] = {float(g_board.screenH - 1), (g_r.batchRegs.fbzMode & SST_YORIGIN) ? 1.0f : 0.0f, 1.0f / 2048.0f,
+                        1.0f / float(g_r.stipTexH)};
+    d->SetPixelShaderConstantF(kPsStippleRows, k, 1);
+}
+}  // namespace
+
 void RenderFlush() {
     if (g_r.batch.empty() || !RenderReady()) {
         g_r.batch.clear();
+        g_r.stipRows.clear();
         return;
     }
     IDirect3DDevice9* d = g_r.dev;
     Dirty();
+    if (!g_r.stipRows.empty()) UploadStippleRows();
     if (g_r.batchBlend && g_r.dstCopy) {
         // Each triangle over a copy of what it covers (it may cover the one before).
         IDirect3DSurface9* rt = nullptr;
@@ -1058,9 +1104,107 @@ void RenderFlush() {
         d->EndScene();
     }
     g_r.batch.clear();
+    if (!g_r.stipRows.empty()) {
+        g_r.stipRows.clear();
+        d->SetTexture(4, nullptr);
+    }
 }
 
+// ---------------------------------------------------------------- stipple rotate mode
+
+// The Voodoo's stipple rotate mode: the stipple register turns one bit for each pixel the
+// rasterizer reaches (after clipping, before the other tests), row by row, left to right, from
+// triangle to triangle, and bit 31 says whether the pixel is drawn; it starts over when the
+// register is written. As MAME's Voodoo (0.220's sequential register: rotated left, then bit 31,
+// so the k-th pixel since the write tests bit 30 - k; current MAME rotates right on a per-row
+// copy, for its threads). A GPU draws in parallel, so the CPU walks each triangle's rows as the
+// Voodoo does (MAME's poly_manager: vertices snapped to 1/16 by truncation, rows round(y1) to
+// round(y3), each from round(x) on the long edge to round(x) on the other at the row's middle,
+// round taking .5 down) and gives the shader every row's span and the bit of its first pixel.
+constexpr bool kStippleRotateLeft = true;  // (false: current MAME's direction, pixel k tests bit k)
+
+namespace {
+int RoundCoordinate(float v) {
+    const float ip = std::floor(v);
+    return int(ip) + ((v - ip) > 0.5f ? 1 : 0);
+}
+float Snap16(float v) {  // the FIFO's float to 12.4 fixed point (MAME's float_to_int32: toward zero)
+    return float(int(v * 16.0f)) * (1.0f / 16.0f);
+}
+}  // namespace
+
+// The rows of a triangle (three vertices) into stipRows; first: its first entry and scanline.
+// One empty row above and below the Voodoo's: Direct3D's rows of the triangle may reach one
+// further, and those pixels aren't drawn.
+void StippleRows(const RVtx* t, const Regs& r, float* firstEntry, float* firstScan) {
+    struct P {
+        float x, y;
+    } a = {Snap16(t[0].x), Snap16(t[0].y)}, b = {Snap16(t[1].x), Snap16(t[1].y)}, c = {Snap16(t[2].x), Snap16(t[2].y)};
+    const P* v1 = &a;
+    const P* v2 = &b;
+    const P* v3 = &c;
+    if (v2->y < v1->y) std::swap(v1, v2);
+    if (v3->y < v2->y) {
+        std::swap(v2, v3);
+        if (v2->y < v1->y) std::swap(v1, v2);
+    }
+    const int W = g_board.screenW, H = g_board.screenH;
+    const int v1y = RoundCoordinate(v1->y), v3y = RoundCoordinate(v3->y);
+    const int y0 = std::max(v1y, 0), y1 = std::min(v3y, H);
+    const float d12 = v2->y == v1->y ? 0.0f : (v2->x - v1->x) / (v2->y - v1->y);
+    const float d13 = v3->y == v1->y ? 0.0f : (v3->x - v1->x) / (v3->y - v1->y);
+    const float d23 = v3->y == v2->y ? 0.0f : (v3->x - v2->x) / (v3->y - v2->y);
+    const bool clip = (r.fbzMode & SST_ENRECTCLIP) != 0;
+    const int cl = int((r.clipLeftRight >> SST_CLIPLEFT_SHIFT) & 0xFFF), cr = int(r.clipLeftRight & 0xFFF);
+    const int ct = int((r.clipBottomTop >> SST_CLIPBOTTOM_SHIFT) & 0xFFF), cb = int(r.clipBottomTop & 0xFFF);
+    const int top = std::min(y0, y1) - 1, bottom = std::max(y0, y1) + 1;  // (the empty rows around)
+    *firstEntry = float(g_r.stipRows.size() / 4);
+    *firstScan = float(top);
+    const float step = kStippleRotateLeft ? -1.0f : 1.0f;
+    for (int y = top; y < bottom; y++) {
+        int sx = 0, ex = 0;
+        if (y >= y0 && y < y1) {
+            const float fy = float(y) + 0.5f;
+            const float startx = v1->x + (fy - v1->y) * d13;
+            const float stopx = fy < v2->y ? v1->x + (fy - v1->y) * d12 : v2->x + (fy - v2->y) * d23;
+            sx = RoundCoordinate(startx), ex = RoundCoordinate(stopx);
+            if (sx > ex) std::swap(sx, ex);
+            sx = std::max(sx, 0), ex = std::min(ex, W);
+            if (clip) {  // (the clip window relative to the origin, as the scissor: ClipRect)
+                if (y < ct || y >= cb || sx >= cr) sx = ex = 0;
+                ex = std::min(ex, cr);
+                sx = std::max(sx, cl);
+            }
+            if (sx >= ex) sx = ex = 0;
+        }
+        const FxU32 k = g_r.stipCount;
+        const float bit = float(kStippleRotateLeft ? (30u - k) & 31u : k & 31u);
+        g_r.stipRows.insert(g_r.stipRows.end(), {float(sx), float(ex), bit, step});
+        g_r.stipCount = (k + FxU32(ex - sx)) & 31u;
+    }
+}
+
+// Pixels the pipeline wrote through the frame buffer: the register turns for them too (the
+// pattern isn't applied to them: no game is known to stipple frame buffer writes, and current
+// MAME warns of it as unexpected).
+void RenderStippleAdvance(unsigned pixels) {
+    const Regs& r = St().r;
+    if ((r.fbzMode & (SST_ENSTIPPLE | SST_ENSTIPPLEPATTERN)) != SST_ENSTIPPLE) return;
+    g_r.stipCount = (g_r.stipCount + pixels) & 31u;
+}
+
+namespace {
+void DrawTriangles(const RVtx* v, int n);
+}
+
+// In pieces of 256 triangles: a batch, and rotate mode's row table, stay bounded however
+// many a vertex array has.
 void RenderTriangles(const RVtx* v, int n) {
+    for (int i = 0; i + 3 <= n; i += 3 * 256) DrawTriangles(v + i, std::min(n - i, 3 * 256) / 3 * 3);
+}
+
+namespace {
+void DrawTriangles(const RVtx* v, int n) {
     if (!RenderReady() || n < 3) return;
     const GlideState& st = St();
     // A state change ends the batch (the registers compared: cheap next to a draw call).
@@ -1085,8 +1229,22 @@ void RenderTriangles(const RVtx* v, int n) {
     const bool active1 = g_board.numTmu > 1 && TmuActive(st.r.tmu[1].textureMode);
     const TmuParams p = {active0 && (hints & 0x2), active1 && (hints & 0x8), active1 && ((hints & 0x10) || !active0)};
     for (int i = 0; i < n; i++) Convert(v[i], &g_r.batch[at + i], wbuffer, flipY, p);
-    if (g_r.batch.size() >= 3 * 4096) RenderFlush();
+    if ((st.r.fbzMode & (SST_ENSTIPPLE | SST_ENSTIPPLEPATTERN)) == SST_ENSTIPPLE) {
+        // Rotate mode: where the register is, then each triangle's rows (StippleRows).
+        if (g_r.stipWrites != g_board.stippleWrites || g_r.stipPattern != st.r.stipple) {
+            g_r.stipWrites = g_board.stippleWrites;
+            g_r.stipPattern = st.r.stipple;
+            g_r.stipCount = 0;
+        }
+        for (int i = 0; i + 3 <= n; i += 3) {
+            float first, scan;
+            StippleRows(v + i, st.r, &first, &scan);
+            for (int j = 0; j < 3; j++) g_r.batch[at + i + j].st0[3] = first, g_r.batch[at + i + j].st1[3] = scan;
+        }
+    }
+    if (g_r.batch.size() >= 3 * 4096 || g_r.stipRows.size() >= size_t(4) * 2048 * 256) RenderFlush();
 }
+}  // namespace
 
 namespace {
 // A quad over the target rectangle (pixels), at depth z.

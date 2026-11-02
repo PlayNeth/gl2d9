@@ -440,7 +440,18 @@ static LONG CALLBACK CrashLogger(EXCEPTION_POINTERS* ep) {
     // "critical error" and then show their error box), usually caught. Counted apart, so
     // a game that throws them routinely can't use up the crashes' log lines.
     case 0xE06D7363: what = "C++ exception"; break;
-    default: return EXCEPTION_CONTINUE_SEARCH;  // not a crash (or, for stack overflows, no stack left to log with)
+    case EXCEPTION_STACK_OVERFLOW: {
+        // Little stack left: one fixed line, no formatting (a crash that logged nothing at all
+        // was NFS High Stakes' endless window-procedure loop). Once.
+        static LONG once;
+        if (g_logFile && InterlockedExchange(&once, 1) == 0) {
+            fputs("stack overflow - if the game crashed now, a call went round in a loop (a window procedure?)\n",
+                  g_logFile);
+            fflush(g_logFile);
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    default: return EXCEPTION_CONTINUE_SEARCH;  // not a crash
     }
     static LONG loggedThrows;
     if (InterlockedIncrement(code == 0xE06D7363 ? &loggedThrows : &logged) > 5) return EXCEPTION_CONTINUE_SEARCH;

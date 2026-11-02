@@ -267,7 +267,10 @@ void StippleMode(FxI32 mode) {
     if (mode == GR_STIPPLE_PATTERN) m |= SST_ENSTIPPLE | SST_ENSTIPPLEPATTERN;
     else if (mode == GR_STIPPLE_ROTATE) m |= SST_ENSTIPPLE;
 }
-void StipplePattern(FxU32 pattern) { R().stipple = pattern; }
+void StipplePattern(FxU32 pattern) {
+    R().stipple = pattern;
+    g_board.stippleWrites++;  // (the register written: rotate mode's position starts over)
+}
 
 // ---------------------------------------------------------------- textures
 
