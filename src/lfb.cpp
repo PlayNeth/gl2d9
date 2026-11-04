@@ -1,7 +1,9 @@
 // See lfb.h. The memory a lock gives is gl2d9's own, the same for reading and writing (as
 // the Voodoo's one address range): a read lock fills it with the buffer as 16-bit pixels, a
 // write lock with the buffer in the write mode's format and keeps a copy; at the write
-// unlock the pixels that differ from the copy are the ones written.
+// unlock the pixels that differ from the copy are the ones written. A write lock in a 32-bit
+// mode has memory of its own (its rows are laid out differently: shared, a read lock's 16-bit
+// fill wrote over the game's 32-bit pixels, and the other way round).
 #include "lfb.h"
 
 #include <algorithm>
@@ -20,8 +22,10 @@ namespace {
 int StridePixels() { return g_board.screenW > 1024 ? 2048 : 1024; }
 
 struct LfbState {
-    FxU8* mem = nullptr;  // StridePixels() * 4 bytes a row (room for the 32-bit modes)
+    FxU8* mem = nullptr;  // StridePixels() * 2 bytes a row: reads, and 16-bit writes
     size_t size = 0;
+    FxU8* mem32 = nullptr;  // StridePixels() * 4 bytes a row: 32-bit writes
+    size_t size32 = 0;
     int readBuffer = -1, writeBuffer = -1;  // locked buffers (-1: none)
     GrOriginLocation_t readOrigin = GR_ORIGIN_UPPER_LEFT, writeOrigin = GR_ORIGIN_UPPER_LEFT;
     GrLfbWriteMode_t writeMode = GR_LFBWRITEMODE_565;
@@ -33,14 +37,32 @@ struct LfbState {
 };
 LfbState g_l;
 
-bool EnsureMemory() {
-    const size_t need = size_t(StridePixels()) * 4 * size_t(std::max(g_board.screenH, 1) + 1);
-    if (g_l.mem && g_l.size >= need) return true;
-    if (g_l.mem) VirtualFree(g_l.mem, 0, MEM_RELEASE);
-    g_l.mem = static_cast<FxU8*>(VirtualAlloc(nullptr, need, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
-    g_l.size = g_l.mem ? need : 0;
-    return g_l.mem != nullptr;
+// Bytes a pixel of a write mode takes in the lock's memory.
+int PixelBytes(int mode) {
+    switch (mode) {
+    case GR_LFBWRITEMODE_888:
+    case GR_LFBWRITEMODE_8888:
+    case GR_LFBWRITEMODE_565_DEPTH:
+    case GR_LFBWRITEMODE_555_DEPTH:
+    case GR_LFBWRITEMODE_1555_DEPTH: return 4;
+    default: return 2;
+    }
 }
+
+// Memory of `bytes`-byte pixels (2 or 4) for the frame, kept from lock to lock (zeroed when
+// made: the columns past the screen's width stay 0, nothing writes them).
+FxU8* Memory(int bytes) {
+    FxU8*& mem = bytes == 4 ? g_l.mem32 : g_l.mem;
+    size_t& size = bytes == 4 ? g_l.size32 : g_l.size;
+    const size_t need = size_t(StridePixels()) * bytes * size_t(std::max(g_board.screenH, 1) + 1);
+    if (mem && size >= need) return mem;
+    if (mem) VirtualFree(mem, 0, MEM_RELEASE);
+    mem = static_cast<FxU8*>(VirtualAlloc(nullptr, need, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    size = mem ? need : 0;
+    return mem;
+}
+// The write lock's memory.
+FxU8* WriteMem() { return PixelBytes(g_l.writeMode) == 4 ? g_l.mem32 : g_l.mem; }
 
 int Lanes() { return int((St().r.lfbMode & SST_LFB_RGBALANES) >> SST_LFB_RGBALANES_SHIFT); }
 
@@ -106,18 +128,6 @@ FxU32 FromArgb(int mode, FxU32 c, int lanes) {
 
 inline FxU16 To565(FxU32 c) { return pix::ScalarTo565(c); }
 
-// Bytes a pixel of a write mode takes in the lock's memory.
-int PixelBytes(int mode) {
-    switch (mode) {
-    case GR_LFBWRITEMODE_888:
-    case GR_LFBWRITEMODE_8888:
-    case GR_LFBWRITEMODE_565_DEPTH:
-    case GR_LFBWRITEMODE_555_DEPTH:
-    case GR_LFBWRITEMODE_1555_DEPTH: return 4;
-    default: return 2;
-    }
-}
-
 bool IsColorBuffer(int buffer) { return buffer == GR_BUFFER_FRONTBUFFER || buffer == GR_BUFFER_BACKBUFFER; }
 // The write modes with a depth value in the upper 16 bits.
 bool HasDepth(int mode) { return mode >= GR_LFBWRITEMODE_565_DEPTH && mode <= GR_LFBWRITEMODE_1555_DEPTH; }
@@ -136,14 +146,15 @@ inline FxU32 Pixel(const FxU8* row, int i, int bytes) {
 
 // The write lock's changes to its buffer.
 void Commit() {
-    if (g_l.writeBuffer < 0 || !g_l.mem || g_l.snapshot.empty()) return;
+    FxU8* const mem = WriteMem();
+    if (g_l.writeBuffer < 0 || !mem || g_l.snapshot.empty()) return;
     const int W = g_board.screenW, H = g_board.screenH;
     const int bytes = PixelBytes(g_l.writeMode);
     const size_t stride = size_t(StridePixels()) * bytes;
     // The rectangle of changed pixels.
     int x0 = W, y0 = H, x1 = -1, y1 = -1;
     for (int y = 0; y < H; y++) {
-        const FxU8* a = g_l.mem + size_t(y) * stride;
+        const FxU8* a = mem + size_t(y) * stride;
         const FxU8* b = g_l.snapshot.data() + size_t(y) * stride;
         if (memcmp(a, b, size_t(W) * bytes) == 0) continue;
         int first = 0, last = W - 1;
@@ -164,7 +175,7 @@ void Commit() {
     const bool flip = g_l.writeOrigin == GR_ORIGIN_LOWER_LEFT;
     for (int j = 0; j < h; j++) {
         const int y = y0 + j;
-        const FxU8* a = g_l.mem + size_t(y) * stride + size_t(x0) * bytes;
+        const FxU8* a = mem + size_t(y) * stride + size_t(x0) * bytes;
         const FxU8* b = g_l.snapshot.data() + size_t(y) * stride + size_t(x0) * bytes;
         // A lower-left origin: the memory's first row is the screen's bottom one.
         const int row = flip ? h - 1 - j : j;
@@ -191,6 +202,12 @@ void Commit() {
     const int sy = flip ? H - 1 - y1 : y0;
     RenderWritePixels(g_l.writeBuffer, x0, sy, w, h, color ? g_l.pixels.data() : nullptr,
                       depth ? g_l.aux.data() : nullptr, g_l.mask.data(), g_l.pipeline);
+    // Written now: compared from here on with what the memory holds (else a later commit, at
+    // a read, a region call, the swap or the unlock, wrote the same pixels again, over what
+    // was drawn meanwhile, and blended or stippled them twice).
+    for (int y = y0; y <= y1; y++)
+        memcpy(g_l.snapshot.data() + size_t(y) * stride + size_t(x0) * bytes,
+               mem + size_t(y) * stride + size_t(x0) * bytes, size_t(w) * bytes);
 }
 
 // The write lock's memory filled from its buffer, and the copy it is compared with.
@@ -198,7 +215,7 @@ void FillForWrite() {
     const int W = g_board.screenW, H = g_board.screenH;
     const int bytes = PixelBytes(g_l.writeMode);
     const size_t stride = size_t(StridePixels()) * bytes;
-    memset(g_l.mem, 0, stride * H);
+    FxU8* const mem = WriteMem();
     const bool flip = g_l.writeOrigin == GR_ORIGIN_LOWER_LEFT;
     const bool color = IsColorBuffer(g_l.writeBuffer);
     const bool haveColor = color && RenderReadBuffer(g_l.writeBuffer, &g_l.pixels);
@@ -208,13 +225,13 @@ void FillForWrite() {
         // The common case, a row at a time. (Lanes 1 and 3 swap red and blue.)
         for (int y = 0; y < H; y++)
             pix::RowTo565(g_l.pixels.data() + size_t(flip ? H - 1 - y : y) * W,
-                          reinterpret_cast<FxU16*>(g_l.mem + size_t(y) * stride), size_t(W));
-        g_l.snapshot.assign(g_l.mem, g_l.mem + stride * H);
+                          reinterpret_cast<FxU16*>(mem + size_t(y) * stride), size_t(W));
+        g_l.snapshot.assign(mem, mem + stride * H);
         return;
     }
     for (int y = 0; y < H; y++) {
         const size_t srcRow = size_t(flip ? H - 1 - y : y) * W;
-        FxU8* row = g_l.mem + size_t(y) * stride;
+        FxU8* row = mem + size_t(y) * stride;
         for (int x = 0; x < W; x++) {
             FxU32 v = 0;
             if (haveColor) v = FromArgb(g_l.writeMode, g_l.pixels[srcRow + x], lanes);
@@ -222,14 +239,14 @@ void FillForWrite() {
             memcpy(row + size_t(x) * bytes, &v, bytes);
         }
     }
-    g_l.snapshot.assign(g_l.mem, g_l.mem + stride * H);
+    g_l.snapshot.assign(mem, mem + stride * H);
 }
 
 }  // namespace
 
 FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrOriginLocation_t origin,
                FxBool pixelPipeline, GrLfbInfo_t* info) {
-    if (!g_board.open || !info || !RenderReady() || !EnsureMemory()) return FXFALSE;
+    if (!g_board.open || !info || !RenderReady() || !Memory(2)) return FXFALSE;
     type &= ~GR_LFB_NOIDLE;
     origin = origin == GR_ORIGIN_LOWER_LEFT ? GR_ORIGIN_LOWER_LEFT : GR_ORIGIN_UPPER_LEFT;
     if (type == GR_LFB_READ_ONLY) {
@@ -241,7 +258,6 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
         const int W = g_board.screenW, H = g_board.screenH;
         const size_t stride = size_t(StridePixels()) * 2;
         FxU16* m = reinterpret_cast<FxU16*>(g_l.mem);
-        memset(g_l.mem, 0, stride * H);
         if (IsColorBuffer(buffer) && RenderReadBuffer(buffer, &g_l.pixels)) {
             for (int y = 0; y < H; y++) {
                 const FxU32* src = g_l.pixels.data() + size_t(origin == GR_ORIGIN_LOWER_LEFT ? H - 1 - y : y) * W;
@@ -252,8 +268,11 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
                 memcpy(m + size_t(y) * StridePixels(),
                        g_l.aux.data() + size_t(origin == GR_ORIGIN_LOWER_LEFT ? H - 1 - y : y) * W, size_t(W) * 2);
         }
-        if (g_l.writeBuffer >= 0) {
-            // Both locked: the read fill becomes what the write lock compares with.
+        else
+            for (int y = 0; y < H; y++) memset(m + size_t(y) * StridePixels(), 0, size_t(W) * 2);
+        if (g_l.writeBuffer >= 0 && PixelBytes(g_l.writeMode) == 2) {
+            // Both locked, sharing the memory: the read fill becomes what the write lock
+            // compares with.
             g_l.snapshot.assign(g_l.mem, g_l.mem + stride * H);
         }
         g_l.readBuffer = buffer;
@@ -266,6 +285,7 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
         return FXTRUE;
     }
     if (type != GR_LFB_WRITE_ONLY || g_l.writeBuffer >= 0) return FXFALSE;
+    if (PixelBytes(writeMode == GR_LFBWRITEMODE_ANY ? GR_LFBWRITEMODE_565 : writeMode) == 4 && !Memory(4)) return FXFALSE;
     if (writeMode == GR_LFBWRITEMODE_ANY)
         writeMode = buffer == GR_BUFFER_AUXBUFFER ? GR_LFBWRITEMODE_ZA16 : GR_LFBWRITEMODE_565;
     switch (writeMode) {
@@ -296,7 +316,7 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
     St().r.lfbMode = m;
     info->strideInBytes = FxU32(StridePixels() * PixelBytes(writeMode));
     info->origin = origin;
-    info->lfbPtr = g_l.mem;
+    info->lfbPtr = WriteMem();
     info->writeMode = writeMode;
     return FXTRUE;
 }
@@ -319,8 +339,7 @@ void LfbBeforeSwap() {
     if (g_l.writeBuffer < 0) return;
     // Still locked over the swap: its changes shown, and compared from here on with what
     // the memory holds now (the buffers moved: the memory still holds the old one's).
-    Commit();
-    g_l.snapshot.assign(g_l.mem, g_l.mem + g_l.snapshot.size());
+    Commit();  // (which brings the copy up to date)
 }
 
 void LfbReset() {
@@ -374,6 +393,16 @@ FxBool LfbWriteRegion(GrBuffer_t dst, FxU32 x, FxU32 y, GrLfbSrcFmt_t format, Fx
         src = unpacked.data();
         srcStride = FxI32(w * 2);
         format = GR_LFBWRITEMODE_565;
+    }
+    // The source formats a colour buffer takes (3dfx's refuses the others: written, they
+    // came out black).
+    if (color) {
+        switch (format) {
+        case GR_LFBWRITEMODE_565: case GR_LFBWRITEMODE_555: case GR_LFBWRITEMODE_1555: case GR_LFBWRITEMODE_888:
+        case GR_LFBWRITEMODE_8888: case GR_LFBWRITEMODE_565_DEPTH: case GR_LFBWRITEMODE_555_DEPTH:
+        case GR_LFBWRITEMODE_1555_DEPTH: break;
+        default: return FXFALSE;
+        }
     }
     const FxU32 W = FxU32(g_board.screenW), H = FxU32(g_board.screenH);
     if (x >= W || y >= H) return FXTRUE;

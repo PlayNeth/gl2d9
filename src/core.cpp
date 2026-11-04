@@ -24,6 +24,8 @@
 // See core.h.
 #include "core.h"
 
+#include "gu.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -53,9 +55,10 @@ inline float Unsnap(float v) {
 // Glide's triangle setup: zero-area triangles are dropped, and the culled side by the sign
 // of the area (dxAB * dyBC - dxBC * dyAB): GR_CULL_NEGATIVE drops it negative, POSITIVE
 // positive.
-bool Visible(const RVtx& a, const RVtx& b, const RVtx& c) {
-    const float dxAB = Unsnap(a.x) - Unsnap(b.x), dxBC = Unsnap(b.x) - Unsnap(c.x);
-    const float dyAB = Unsnap(a.y) - Unsnap(b.y), dyBC = Unsnap(b.y) - Unsnap(c.y);
+// (Of vertices already brought back to the screen: Snapped.)
+bool VisibleSnapped(const RVtx& a, const RVtx& b, const RVtx& c) {
+    const float dxAB = a.x - b.x, dxBC = b.x - c.x;
+    const float dyAB = a.y - b.y, dyBC = b.y - c.y;
     const float area = dxAB * dyBC - dxBC * dyAB;
     if (area == 0.0f || std::isnan(area)) return false;
     const int cull = St().cullMode;
@@ -71,7 +74,24 @@ inline RVtx Snapped(const RVtx& v) {
     return o;
 }
 
+bool Visible(const RVtx& a, const RVtx& b, const RVtx& c) { return VisibleSnapped(Snapped(a), Snapped(b), Snapped(c)); }
+
 std::vector<RVtx> g_tris;  // triangles of one call, drawn together
+
+// Triangle a, b, c added to g_tris, brought back to the screen, unless culled (each vertex
+// copied and brought back once, not once for the test and again for the drawing).
+inline void AddTriangle(const RVtx& a, const RVtx& b, const RVtx& c) {
+    g_board.trisIn++;
+    const size_t at = g_tris.size();
+    g_tris.push_back(Snapped(a));
+    g_tris.push_back(Snapped(b));
+    g_tris.push_back(Snapped(c));
+    if (!VisibleSnapped(g_tris[at], g_tris[at + 1], g_tris[at + 2])) {
+        g_tris.resize(at);
+        return;
+    }
+    g_board.trisOut++;
+}
 
 // ---- antialiasing, as 3dfx's Glide does it (gaa.c): the primitive drawn, then a strip a
 // pixel wide outside each antialiased edge, its outer side at alpha 0 (the game blends with
@@ -171,11 +191,9 @@ FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refres
     g_board.numColorBuffers = std::clamp(numColorBuffers, 2, 3);
     g_board.numAuxBuffers = std::clamp(numAuxBuffers, 0, 1);
     g_board.trisIn = g_board.trisOut = g_board.swaps = g_board.pointsDrawn = g_board.linesDrawn = 0;
-    g_board.mipmaps.clear();
-    for (int t = 0; t < kMaxTmu; t++) {
-        g_board.freeMemBase[t] = 0;
-        g_board.currentMipMap[t] = GR_NULL_MIPMAP_HANDLE;
-    }
+    // guTexMemReset, as 3dfx's grSstWinOpen: the mipmaps, and which ones the NCC tables hold
+    // (kept, a YIQ mipmap of the reopened board with an old one's id skipped its table).
+    GuTexMemReset();
     st::InitState(origin == GR_ORIGIN_LOWER_LEFT ? GR_ORIGIN_LOWER_LEFT : GR_ORIGIN_UPPER_LEFT);
     GL_LOG("grSstWinOpen: %dx%d, %s origin, %d color / %d aux buffers, refresh %ld", w, h,
            origin == GR_ORIGIN_LOWER_LEFT ? "lower left" : "upper left", g_board.numColorBuffers,
@@ -210,14 +228,7 @@ void CoreTriangle(const RVtx& a, const RVtx& b, const RVtx& c) {
 void CoreFan(const RVtx* v, int n) {
     if (n < 3 || !g_board.open) return;
     g_tris.clear();
-    for (int i = 1; i + 1 < n; i++) {
-        g_board.trisIn++;
-        if (!Visible(v[0], v[i], v[i + 1])) continue;
-        g_board.trisOut++;
-        g_tris.push_back(Snapped(v[0]));
-        g_tris.push_back(Snapped(v[i]));
-        g_tris.push_back(Snapped(v[i + 1]));
-    }
+    for (int i = 1; i + 1 < n; i++) AddTriangle(v[0], v[i], v[i + 1]);
     if (!g_tris.empty()) RenderTriangles(g_tris.data(), int(g_tris.size()));
 }
 
@@ -225,12 +236,7 @@ void CoreFan(const RVtx* v, int n) {
 void CoreTriangleList(const RVtx* v, int n) {
     if (!g_board.open) return;
     g_tris.clear();
-    for (int i = 0; i + 2 < n; i += 3) {
-        g_board.trisIn++;
-        if (!Visible(v[i], v[i + 1], v[i + 2])) continue;
-        g_board.trisOut++;
-        for (int k = 0; k < 3; k++) g_tris.push_back(Snapped(v[i + k]));
-    }
+    for (int i = 0; i + 2 < n; i += 3) AddTriangle(v[i], v[i + 1], v[i + 2]);
     if (!g_tris.empty()) RenderTriangles(g_tris.data(), int(g_tris.size()));
 }
 
@@ -242,12 +248,7 @@ void CoreStrip(const RVtx* v, int n, bool odd) {
     for (int i = 0; i + 2 < n; i++, odd = !odd) {
         const RVtx& a = odd ? v[i + 1] : v[i];
         const RVtx& b = odd ? v[i] : v[i + 1];
-        g_board.trisIn++;
-        if (!Visible(a, b, v[i + 2])) continue;
-        g_board.trisOut++;
-        g_tris.push_back(Snapped(a));
-        g_tris.push_back(Snapped(b));
-        g_tris.push_back(Snapped(v[i + 2]));
+        AddTriangle(a, b, v[i + 2]);
     }
     if (!g_tris.empty()) RenderTriangles(g_tris.data(), int(g_tris.size()));
 }
@@ -347,9 +348,26 @@ void CoreSwap(int interval) {
     if (!g_board.open) return;
     LfbBeforeSwap();
     g_board.swaps++;
-    LimitFrame();  // (under the lock: the swap is the game's one thread at a time anyway)
+    // The waits (fpslimit=, the swap interval) without the lock: held, the window's
+    // procedure (focus changes, repaints) and any other thread calling Glide waited too.
+    // (The entry's one hold let go: the swap isn't called with the lock held otherwise.)
+    auto unlocked = [](auto wait) {
+        LeaveCriticalSection(&g_lock);
+        wait();
+        EnterCriticalSection(&g_lock);
+    };
+    const int paced = g_config.vsync == kVSyncAuto ? interval : 1;
+    unlocked([paced] {
+        LimitFrame();
+        LimitSwapInterval(paced);
+    });
+    if (!g_board.open) return;  // (closed by another thread meanwhile)
     RenderSwap(interval);
     WindowPump();
+    // Minimized (Alt+Tab): nothing is shown, and the swap doesn't wait for the display: a
+    // refresh's time waited instead, else the game's loop took a whole core (all of it with
+    // cpus=1).
+    if (g_board.open && g_board.hwnd && IsIconic(g_board.hwnd)) unlocked([] { Sleep(16); });
 }
 
 FxU32 CoreTexMaxAddress(GrChipID_t tmu) {

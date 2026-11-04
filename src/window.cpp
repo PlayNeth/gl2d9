@@ -195,6 +195,11 @@ LONG_PTR SetProc(HWND h, bool unicode, LONG_PTR proc) {
 
 LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp);
 
+UINT DeferredActivateMsg() {
+    static const UINT msg = RegisterWindowMessageW(L"gl2d9 deferred WM_ACTIVATEAPP");
+    return msg;
+}
+
 // The window procedure gl2d9 puts in front of the game's. Nested more than 200 deep on one
 // thread it can only be calling itself round a loop of subclasses (two HookProcs in one chain,
 // which StaleHook prevents): logged once and broken there, rather than the stack overflowing
@@ -215,6 +220,21 @@ LRESULT CALLBACK HookProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    // gl2d9's own retry of a WM_ACTIVATEAPP (wParam: active; lParam: tries so far, up to
+    // 500): never the game's. The focus at the time it runs decides, not the one posted.
+    if (const UINT again = DeferredActivateMsg(); again && msg == again) {
+        if (h == g_w.hwnd && g_w.hooked) {
+            if (TryEnterCriticalSection(&g_lock)) {
+                DWORD pid = 0;
+                GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+                if (g_board.open) Activate(pid == GetCurrentProcessId());
+                LeaveCriticalSection(&g_lock);
+            } else if (lp < 500) {
+                PostMessageW(h, again, wp, lp + 1);
+            }
+        }
+        return 0;
+    }
     if (h != g_w.hwnd || !g_w.hooked) {
         // A window gl2d9 is no longer open on, still in its chain: its own procedure.
         if (StaleHook* e = FindStale(h)) {
@@ -239,9 +259,14 @@ LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_board.open && GetCursor()) SetCursor(nullptr);
         break;
     case WM_ACTIVATEAPP:
+        // A game drawing on another thread holds the lock most of the frame: tried again
+        // shortly (a focus change dropped left the window topmost over the desktop, or, the
+        // focus back dropped, the game minimized for good).
         if (TryEnterCriticalSection(&g_lock)) {
             Activate(wp != 0);
             LeaveCriticalSection(&g_lock);
+        } else if (const UINT again = DeferredActivateMsg()) {
+            PostMessageW(h, again, wp != 0, 0);
         }
         break;
     case WM_PAINT:

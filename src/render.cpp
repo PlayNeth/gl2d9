@@ -8,6 +8,8 @@
 
 #include <tlhelp32.h>
 
+#include <emmintrin.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -196,6 +198,11 @@ IDirect3D9Ex* CreateD3D9Ex() {
 // video memory (9Ex devices don't lose it).
 D3DPOOL TexturePool() { return g_r.ex ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED; }
 DWORD TextureUsage() { return g_r.ex ? D3DUSAGE_DYNAMIC : 0; }
+// Locking a one-level texture made so, every texel rewritten: a dynamic one (9Ex) discarded,
+// not waited for while the GPU may still be drawing with it. (Not one with mipmaps: Wine's
+// Direct3D discarded the levels already written with it, and the 3dfx tests' font came out
+// in pieces.)
+DWORD RewriteLock() { return g_r.ex ? D3DLOCK_DISCARD : 0; }
 
 // Every device made the usual ways refused (9 and 9Ex): what might explain it logged (Windows
 // as it is and as the game is told, the adapter, the modules loaded: an overlay or another
@@ -451,12 +458,15 @@ const char* kClearPs =
     "float4 c : register(c0);\n"
     "float4 main() : COLOR { return c; }\n";
 
+// (Failing part way, none are kept: RenderReady goes by color[0], and Target used color[1]
+// whatever it was.)
 bool MakeTargets() {
     IDirect3DDevice9* d = g_r.dev;
     for (auto*& c : g_r.color) {
         if (FAILED(d->CreateTexture(g_r.w, g_r.h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &c,
                                     nullptr))) {
             c = nullptr;
+            ReleaseTargets();
             return false;
         }
     }
@@ -476,7 +486,10 @@ bool MakeTargets() {
                                                 nullptr)))
             g_r.depth = nullptr;
     }
-    if (!g_r.depth) return false;
+    if (!g_r.depth) {
+        ReleaseTargets();
+        return false;
+    }
     if (FAILED(d->CreateTexture(GR_FOG_TABLE_SIZE, 1, 1, TextureUsage(), D3DFMT_A8R8G8B8, TexturePool(), &g_r.fogTex,
                                  nullptr)))
         g_r.fogTex = nullptr;
@@ -499,11 +512,31 @@ bool MakeTargets() {
 }
 
 // Device lost (another program's mode change, the lock screen): back when it can be Reset.
+// Targets missing (a Reset or their making failed before): made again, at most every quarter
+// second (else the screen stayed black until the game opened Glide again).
 bool DeviceUsable() {
     if (!g_r.dev) return false;
     const HRESULT hr = g_r.dev->TestCooperativeLevel();
-    if (hr == D3D_OK) return true;
+    if (hr == D3D_OK) {
+        if (g_r.color[0]) return true;
+        static DWORD triedAt;
+        const DWORD now = GetTickCount();
+        if (triedAt && now - triedAt < 250) return false;
+        triedAt = now | 1;
+        if (!MakeTargets()) return false;
+        GL_LOG("render targets made again");
+        return true;
+    }
     if (hr != D3DERR_DEVICENOTRESET) return false;
+    // What the device itself holds goes too (bound, a Direct3D 9 device's render targets and
+    // textures in the default pool stayed alive, and Reset refused).
+    for (DWORD i = 0; i < 8; i++) g_r.dev->SetTexture(i, nullptr);
+    g_r.dev->SetDepthStencilSurface(nullptr);
+    IDirect3DSurface9* bb = nullptr;
+    if (SUCCEEDED(g_r.dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) {
+        g_r.dev->SetRenderTarget(0, bb);
+        bb->Release();
+    }
     ReleaseTargets();
     D3DPRESENT_PARAMETERS pp = Params();
     if (FAILED(g_r.dev->Reset(&pp))) return false;
@@ -625,7 +658,7 @@ IDirect3DTexture9* BindTexture(int tmu) {
     if (!d.tsplit) {  // decoded straight into the texture
         for (int i = 0; i < levels; i++) {
             D3DLOCKED_RECT lr;
-            if (FAILED(e.tex->LockRect(i, &lr, nullptr, 0))) continue;
+            if (FAILED(e.tex->LockRect(i, &lr, nullptr, levels == 1 ? RewriteLock() : 0))) continue;
             DecodeLevel(d, d.lodMin + i, static_cast<FxU32*>(lr.pBits), lr.Pitch / 4);
             e.tex->UnlockRect(i);
         }
@@ -650,7 +683,7 @@ IDirect3DTexture9* BindTexture(int tmu) {
                 }
         }
         D3DLOCKED_RECT lr;
-        if (SUCCEEDED(e.tex->LockRect(i, &lr, nullptr, 0))) {
+        if (SUCCEEDED(e.tex->LockRect(i, &lr, nullptr, levels == 1 ? RewriteLock() : 0))) {
             for (int y = 0; y < lh; y++)
                 memcpy(static_cast<uint8_t*>(lr.pBits) + size_t(y) * lr.Pitch, &px[size_t(y) * lw], lw * 4);
             e.tex->UnlockRect(i);
@@ -761,7 +794,7 @@ void ApplyState() {
     if ((r.fogMode & SST_ENFOGGING) && g_r.fogTex &&
         (!g_r.fogValid || memcmp(g_r.fogLoaded, r.fogTable, GR_FOG_TABLE_SIZE))) {
         D3DLOCKED_RECT lr;
-        if (SUCCEEDED(g_r.fogTex->LockRect(0, &lr, nullptr, 0))) {
+        if (SUCCEEDED(g_r.fogTex->LockRect(0, &lr, nullptr, RewriteLock()))) {
             FxU32* px = static_cast<FxU32*>(lr.pBits);
             for (int i = 0; i < GR_FOG_TABLE_SIZE; i++) px[i] = FxU32(r.fogTable[i]) << 24;
             g_r.fogTex->UnlockRect(0);
@@ -1031,7 +1064,8 @@ void RenderClose() {
     g_r.hwnd = nullptr;
 }
 
-bool RenderReady() { return g_r.dev && g_r.color[0]; }
+// (The targets lost to a failed Reset: made again here, DeviceUsable.)
+bool RenderReady() { return g_r.dev && (g_r.color[0] || (DeviceUsable() && g_r.color[0])); }
 
 // ---------------------------------------------------------------- drawing
 
@@ -1303,6 +1337,9 @@ void Present() {
     HWND hwnd = g_r.hwnd;
     RECT client = {};
     if (!hwnd || !GetClientRect(hwnd, &client) || client.right <= 0 || client.bottom <= 0 || IsIconic(hwnd)) return;
+    // The targets and states change from here on, whichever way it returns (it returned with
+    // voodoolook's target still set, and the next batch drew into it).
+    g_r.batchState = false;
     const UINT cw = std::min<UINT>(UINT(client.right), g_r.bbW), ch = std::min<UINT>(UINT(client.bottom), g_r.bbH);
     // voodoolook: the frame dithered to 16 bits first (into look), shown from there.
     IDirect3DTexture9* frame = g_r.color[0];
@@ -1703,8 +1740,22 @@ void RenderWritePixels(int buffer, int x, int y, int w, int h, const FxU32* argb
     for (int j = 0; j < h; j++) {
         FxU32* crow = reinterpret_cast<FxU32*>(static_cast<uint8_t*>(lc.pBits) + size_t(j) * lc.Pitch);
         const size_t row = size_t(j) * w;
-        if (plain) {
-            for (int i = 0; i < w; i++) crow[i] = mask && !mask[row + i] ? 0 : argb[row + i] | 0xFF000000u;
+        if (plain) {  // (four at a time: a movie writes the whole frame every frame)
+            const FxU32* src = argb + row;
+            const FxU8* m = mask ? mask + row : nullptr;
+            const __m128i opaque = _mm_set1_epi32(int(0xFF000000u)), zero = _mm_setzero_si128();
+            int i = 0;
+            for (; i + 4 <= w; i += 4) {
+                __m128i v = _mm_or_si128(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i)), opaque);
+                if (m) {
+                    FxU32 m4;
+                    memcpy(&m4, m + i, 4);
+                    const __m128i written = _mm_unpacklo_epi16(_mm_unpacklo_epi8(_mm_cvtsi32_si128(int(m4)), zero), zero);
+                    v = _mm_andnot_si128(_mm_cmpeq_epi32(written, zero), v);  // not written: 0
+                }
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(crow + i), v);
+            }
+            for (; i < w; i++) crow[i] = m && !m[i] ? 0 : src[i] | 0xFF000000u;
             continue;
         }
         float* arow = reinterpret_cast<float*>(static_cast<uint8_t*>(la.pBits) + size_t(j) * la.Pitch);

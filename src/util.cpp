@@ -564,8 +564,25 @@ namespace {
 void SleepUntilQpc(int64_t target) {
     static LARGE_INTEGER freq;
     if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
-    thread_local HANDLE timer =
-        CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+    // One high-resolution timer per thread, closed with the thread. Without one (Windows
+    // before 10 1803): Sleep, with the system's timer at 1 ms (asked once: at the default
+    // 15.6 ms a Sleep(15) took 31 ms, and fpslimit=60 gave an erratic 32-64 fps).
+    struct ThreadTimer {
+        HANDLE h = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+        ~ThreadTimer() {
+            if (h) CloseHandle(h);
+        }
+    };
+    thread_local ThreadTimer threadTimer;
+    HANDLE timer = threadTimer.h;
+    // (winmm.dll loaded only then: linked, it was loaded into every game.)
+    static LONG periodSet;
+    auto finePeriod = [] {
+        if (InterlockedExchange(&periodSet, 1)) return;
+        if (HMODULE mm = LoadLibraryW(L"winmm.dll"))
+            if (auto begin = reinterpret_cast<UINT(WINAPI*)(UINT)>(reinterpret_cast<void*>(GetProcAddress(mm, "timeBeginPeriod")))) begin(1);
+    };
+    if (!timer) finePeriod();
     for (;;) {
         LARGE_INTEGER now;
         QueryPerformanceCounter(&now);
@@ -579,6 +596,9 @@ void SleepUntilQpc(int64_t target) {
                 WaitForSingleObject(timer, INFINITE);
                 continue;
             }
+            // (Refused: Sleep from here on, not a busy wait for the rest.)
+            timer = nullptr;
+            finePeriod();
         }
         if (!timer && ms > 2.0) Sleep(DWORD(ms - 1.5));
         else YieldProcessor();
@@ -598,6 +618,37 @@ void LimitFrame() {
     QueryPerformanceCounter(&now);
     if (!next || now.QuadPart > next + period) next = now.QuadPart;
     SleepUntilQpc(next);
+    next += period;
+}
+
+// vsync=auto and grBufferSwap(N), N 2 or more: frames N refreshes apart. The swap waits for
+// one refresh (D3DPRESENT_INTERVAL_ONE); the rest is waited here, from the display's rate
+// (asked again every few seconds: the game may switch modes). A frame later than that starts
+// the count again.
+void LimitSwapInterval(int interval) {
+    static int64_t next;
+    static LARGE_INTEGER freq;
+    static DWORD hz, hzAt;
+    if (interval < 2) {
+        next = 0;
+        return;
+    }
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    const DWORD tick = GetTickCount();
+    if (!hzAt || tick - hzAt > 5000) {
+        DEVMODEW dm = {};
+        dm.dmSize = sizeof(dm);
+        hz = EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1
+                 ? dm.dmDisplayFrequency
+                 : 60;
+        hzAt = tick | 1;
+    }
+    const int64_t period = freq.QuadPart * interval / hz;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    // (Less a tenth of a refresh: the swap's own wait for the refresh lines it up.)
+    if (!next || now.QuadPart > next + period) next = now.QuadPart;
+    SleepUntilQpc(next - freq.QuadPart / (10 * int64_t(hz)));
     next += period;
 }
 

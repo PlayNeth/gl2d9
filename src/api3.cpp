@@ -100,10 +100,26 @@ void TexScale(int tmu, float* s, float* t) {
     *t = sWide ? shorter : 256.0f;
 }
 
-RVtx Read(const void* v) {
+// What decoding a vertex needs that is the same for every vertex of a draw (taken once per
+// call: the texture scales were worked out again for each vertex).
+struct ReadCtx {
+    bool clip;
+    float ss[2] = {1, 1}, ts[2] = {1, 1};
+};
+ReadCtx MakeReadCtx() {
+    ReadCtx c;
+    c.clip = g_coordSpace == GR_CLIP_COORDS;
+    if (c.clip) {
+        TexScale(0, &c.ss[0], &c.ts[0]);
+        if (g_board.numTmu > 1) TexScale(1, &c.ss[1], &c.ts[1]);
+    }
+    return c;
+}
+
+RVtx Read(const void* v, const ReadCtx& ctx) {
     const Layout& L = g_layout;
     RVtx o{};
-    const bool clip = g_coordSpace == GR_CLIP_COORDS;
+    const bool clip = ctx.clip;
     float oowc = 1.0f;  // clip coordinates: 1/w
     if (clip) {
         const float w = On(L.w) ? F(v, L.w.offset) : 1.0f;
@@ -131,11 +147,8 @@ RVtx Read(const void* v) {
         }
         if (On(L.a)) o.a = F(v, L.a.offset) * k;
     }
-    float ss[2] = {1, 1}, ts[2] = {1, 1};
-    if (clip) {
-        TexScale(0, &ss[0], &ts[0]);
-        if (g_board.numTmu > 1) TexScale(1, &ss[1], &ts[1]);
-    }
+    const float* ss = ctx.ss;
+    const float* ts = ctx.ts;
     const float k0 = clip ? oowc : 1.0f;
     if (On(L.st0)) {
         o.sow[0] = F(v, L.st0.offset) * k0 * ss[0];
@@ -168,11 +181,11 @@ void DrawArray(FxU32 mode, FxU32 count, const void* const* ptrs, const void* bas
         return ptrs ? ptrs[i] : static_cast<const FxU8*>(base) + size_t(i) * stride;
     };
     const bool cont = mode == GR_TRIANGLE_STRIP_CONTINUE || mode == GR_TRIANGLE_FAN_CONTINUE;
-    g_verts.clear();
-    if (cont) {
-        for (int i = 0; i < g_contCount; i++) g_verts.push_back(g_cont[i]);
-    }
-    for (FxU32 i = 0; i < count; i++) g_verts.push_back(Read(at(i)));
+    const int first = cont ? g_contCount : 0;
+    g_verts.resize(size_t(first) + count);
+    for (int i = 0; i < first; i++) g_verts[size_t(i)] = g_cont[i];
+    const ReadCtx ctx = MakeReadCtx();
+    for (FxU32 i = 0; i < count; i++) g_verts[first + i] = Read(at(i), ctx);
     RVtx* v = g_verts.data();
     const int n = int(g_verts.size());
     switch (mode) {
@@ -489,27 +502,31 @@ GLAPI void grDrawPoint(const void* p) {
     ENTRY("grDrawPoint");
     if (!p) return;
     SetHints();
-    if (g_aa) CoreAAPoint(Read(p));
-    else CorePoint(Read(p));
+    const ReadCtx ctx = MakeReadCtx();
+    if (g_aa) CoreAAPoint(Read(p, ctx));
+    else CorePoint(Read(p, ctx));
 }
 GLAPI void grDrawLine(const void* a, const void* b) {
     ENTRY("grDrawLine");
     if (!a || !b) return;
     SetHints();
-    if (g_aa) CoreAALine(Read(a), Read(b));
-    else CoreLine(Read(a), Read(b));
+    const ReadCtx ctx = MakeReadCtx();
+    if (g_aa) CoreAALine(Read(a, ctx), Read(b, ctx));
+    else CoreLine(Read(a, ctx), Read(b, ctx));
 }
 GLAPI void grDrawTriangle(const void* a, const void* b, const void* c) {
     ENTRY("grDrawTriangle");
     if (!a || !b || !c) return;
     SetHints();
-    CoreTriangle(Read(a), Read(b), Read(c));
+    const ReadCtx ctx = MakeReadCtx();
+    CoreTriangle(Read(a, ctx), Read(b, ctx), Read(c, ctx));
 }
 GLAPI void grAADrawTriangle(const void* a, const void* b, const void* c, FxBool ab, FxBool bc, FxBool ca) {
     ENTRY("grAADrawTriangle");
     if (!a || !b || !c) return;
     SetHints();
-    CoreAATriangle(Read(a), Read(b), Read(c), ab != FXFALSE, bc != FXFALSE, ca != FXFALSE);
+    const ReadCtx ctx = MakeReadCtx();
+    CoreAATriangle(Read(a, ctx), Read(b, ctx), Read(c, ctx), ab != FXFALSE, bc != FXFALSE, ca != FXFALSE);
 }
 GLAPI void grDrawVertexArray(FxU32 mode, FxU32 count, void* ptrs) {
     ENTRY("grDrawVertexArray");

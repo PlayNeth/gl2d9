@@ -71,8 +71,9 @@ GrSstType BoardType() { return g_version == kGlide21 ? GR_SSTTYPE_VOODOO : GR_SS
 double FramePhase() {
     static const int kRates[] = {60, 70, 72, 75, 80, 90, 100, 85, 120};
     const int hz = g_board.refresh >= 0 && g_board.refresh < 9 ? kRates[g_board.refresh] : 60;
-    LARGE_INTEGER f, c;
-    QueryPerformanceFrequency(&f);
+    static LARGE_INTEGER f;  // (asked once: games poll these in a loop)
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    LARGE_INTEGER c;
     QueryPerformanceCounter(&c);
     const double t = double(c.QuadPart) / double(f.QuadPart) * hz;
     return t - std::floor(t);
@@ -497,6 +498,7 @@ GLAPI void grSplash() {}
 GLAPI FxBool grSstOpen(GrScreenResolution_t res, GrScreenRefresh_t refresh, GrColorFormat_t format,
                        GrOriginLocation_t origin, GrSmoothingMode_t, int numBuffers) {
     ENTRY("grSstOpen");
+    g_lfb21Read = g_lfb21Write = -1;  // (the locks don't outlive a board)
     return CoreWinOpen(nullptr, res, refresh, format, origin, numBuffers, 1);
 }
 #else
@@ -545,6 +547,9 @@ GLAPI FxBool grSstWinOpen(FxU32 hwnd, GrScreenResolution_t res, GrScreenRefresh_
 GLAPI void grSstWinClose() {
     ENTRY("grSstWinClose");
     CoreWinClose();
+#ifdef GLIDE21
+    g_lfb21Read = g_lfb21Write = -1;
+#endif
 }
 GLAPI FxBool grSstControl(GrControl_t) { return FXTRUE; }
 GLAPI void grSstConfigPipeline(GrChipID_t, FxU32, FxU32) {}

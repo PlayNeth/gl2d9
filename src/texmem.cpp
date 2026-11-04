@@ -176,9 +176,12 @@ void DownloadPalette(GrChipID_t tmu, const FxU32* entries, int start, int end) {
     for (int i = start; i <= end && same; i++) same = g_board.palette[0][i] == (entries[i] & 0xFFFFFF);
     if (same) return;
     RenderTexturesChanged();
-    for (int t = 0; t < g_board.numTmu; t++) {
-        for (int i = start; i <= end; i++) g_board.palette[t][i] = entries[i] & 0xFFFFFF;
-        g_board.paletteHash[t] = Hash(g_board.palette[t], sizeof(g_board.palette[t]));
+    // Every TMU gets it (the TMUs' palettes are always the same): hashed once, copied.
+    for (int i = start; i <= end; i++) g_board.palette[0][i] = entries[i] & 0xFFFFFF;
+    g_board.paletteHash[0] = Hash(g_board.palette[0], sizeof(g_board.palette[0]));
+    for (int t = 1; t < g_board.numTmu; t++) {
+        memcpy(g_board.palette[t], g_board.palette[0], sizeof(g_board.palette[0]));
+        g_board.paletteHash[t] = g_board.paletteHash[0];
     }
 }
 

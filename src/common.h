@@ -14,7 +14,7 @@
 
 namespace gl2d9 {
 
-#define GL2D9_VERSION "1.0.1"
+#define GL2D9_VERSION "1.0.2"
 
 enum { kDisplaySwitch, kDisplayWindow, kDisplayBorderless };
 enum { kVSyncAuto, kVSyncOn, kVSyncOff };
@@ -57,6 +57,7 @@ std::wstring ScreenshotPath();
 void LogInit();
 void ApplyCpus();   // cpus=: the processors the process runs on (after LogInit: logged)
 void LimitFrame();  // fpslimit=: waits out the rest of the frame's time (at the buffer swap)
+void LimitSwapInterval(int interval);  // vsync=auto: grBufferSwap(2 or more), frames that many refreshes apart
 extern int g_logLevel;  // (util.cpp) read at every log and trace site: inline
 inline int LogLevel() { return g_logLevel; }
 void Log(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));

@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.0.2
+Fixes for frame buffer locks, focus changes, vsync and device resets, and some work taken off
+the hot paths. The pictures are the same as 1.0.1's.
+
+- **Frame buffer writes aren't written twice.** A write lock's changes are written at the
+  unlock, and earlier when the game reads (a read lock, `grLfbReadRegion`) or writes a region
+  meanwhile. Those changes were then still told apart from the lock's copy, so the unlock
+  wrote them again, over whatever had been drawn since (and with the pixel pipeline on,
+  blended or stippled them twice). New test `tests/glide3/lfblock`: a pixel written, read
+  back, a triangle drawn over it, then the unlock left the pixel instead of the triangle.
+- **A write lock in a 32-bit mode has memory of its own.** The read and write locks shared
+  one block (as the Voodoo's one address range). A read lock taken while an 8888 or
+  depth-mode write lock was held filled that block with 16-bit pixels at a 16-bit stride,
+  over the game's 32-bit ones, and the write lock's copy came out half the size, read past
+  its end at the unlock. 16-bit write locks still share the block.
+- `grLfbWriteRegion` refuses source formats a colour buffer can't take (3dfx's does); such a
+  write came out black.
+- **Focus changes aren't lost.** A game drawing on another thread holds Glide's lock most of
+  each frame; a `WM_ACTIVATEAPP` that found it taken did nothing. A missed focus loss left
+  the game topmost over the desktop; a missed focus return left it minimized, with the mode
+  not switched back. It is now tried again shortly after.
+- **The frame limit waits without Glide's lock** (`fpslimit=`, and the swap interval below),
+  so the window's messages and other threads don't wait with it.
+- **`vsync=auto` follows `grBufferSwap`'s interval**, as documented: `grBufferSwap(2)` and
+  up shows a frame every 2 (or more) refreshes. They ran at the full refresh rate.
+  `grBufferSwap(0)` still waits for one refresh.
+- **Minimized, a game no longer takes a whole core.** The swap doesn't wait for the display
+  then; a refresh's time is waited instead.
+- **A failed device reset isn't the end.** If `Reset` failed once (the device lost again
+  meanwhile), or the render targets couldn't all be made, the screen stayed black until the
+  game opened Glide again (or a half-made set crashed). The targets are made again as soon
+  as the device allows. Before `Reset`, the device's own references to its targets and
+  textures are dropped too (they made `Reset` fail).
+- With `voodoolook=1`, a `Present` that couldn't get the back buffer left its own target
+  set for the next drawing.
+- Glide utility (`gu*`) textures: reopening Glide forgets which mipmaps the NCC tables hold,
+  as 3dfx's `grSstWinOpen` does (a YIQ texture of the new session could reuse an old
+  session's table). Glide 2.1's frame buffer pointers are forgotten with the board.
+- The frame limiter's timer is closed with its thread; where Windows has no high-resolution
+  timer (before Windows 10 1803), the system timer is set to 1 ms so `fpslimit=` keeps its
+  rate (it gave an erratic 32–64 fps at 60), and a refused timer no longer busy-waits.
+- Faster: Glide 3 vertices decoded with the draw's texture scales worked out once per call,
+  not per vertex; each triangle's vertices brought back to the screen once (they were twice:
+  for the culling test and for drawing); full-frame frame buffer writes (movies, menus)
+  converted four pixels at a time (SSE2); a palette download hashed once, not per TMU; the
+  timer frequency for `grSstStatus` and the like asked once; on Direct3D 9Ex, one-level
+  textures and the fog table discarded when rewritten instead of waited for.
+- Tested: the Glide 2 and Glide 3 SDK test programs and `tests/`, against 1.0.1 (run twice,
+  to tell timing from changes): the same pictures and printed results, but for tests that
+  animate by frame count or clock. The new `lfblock` fails on 1.0.1 and passes.
+
 ## 1.0.1
 - **No crash when a game opens Glide again on its window** after something else subclassed
   that window (dd2d9, for the game's DirectDraw menus, or the game itself). gl2d9 can't
