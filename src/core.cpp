@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 
 #include "lfb.h"
 #include "texmem.h"
@@ -148,6 +149,27 @@ bool ResolutionSize(GrScreenResolution_t res, int* w, int* h) {
     return true;
 }
 
+void CallFailed(const char* where) {
+    const char* what = "an exception";
+    if (std::exception_ptr e = std::current_exception()) {
+        try {
+            std::rethrow_exception(e);
+        } catch (const std::exception& x) {
+            what = x.what();
+        } catch (...) {
+        }
+    }
+    // The first five logged, then every hundredth (a game out of memory fails call after call).
+    static LONG failures;
+    const LONG n = InterlockedIncrement(&failures);
+    if (n <= 5 || n % 100 == 0) GL_LOG("%s failed: %s (%ld so far): what it did dropped", where, what, n);
+    try {
+        Guard guard;
+        RenderRecover();
+    } catch (...) {
+    }
+}
+
 void CoreInit() {
     g_board.numTmu = std::clamp(g_config.tmus, 1, 2);
     // Auto: a Voodoo2's 4 MB per TMU for Glide 2, a Voodoo3's 16 MB for Glide 3. Glide 3 games
@@ -198,10 +220,18 @@ FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refres
     GL_LOG("grSstWinOpen: %dx%d, %s origin, %d color / %d aux buffers, refresh %ld", w, h,
            origin == GR_ORIGIN_LOWER_LEFT ? "lower left" : "upper left", g_board.numColorBuffers,
            g_board.numAuxBuffers, static_cast<long>(refresh));
-    if (!WindowOpen(hwnd)) return FXFALSE;
-    if (!RenderOpen(g_board.hwnd)) {
+    try {
+        if (!WindowOpen(hwnd)) return FXFALSE;
+        if (!RenderOpen(g_board.hwnd)) {
+            WindowClose();
+            return FXFALSE;
+        }
+    } catch (...) {
+        // Half open (memory run out): closed again, the game's next grSstWinOpen starting from
+        // nothing, and the failure passed on (CallFailed: the call returns 0).
+        RenderClose();
         WindowClose();
-        return FXFALSE;
+        throw;
     }
     RenderSetGamma(1.3f);  // Glide's default (the Voodoo's own gamma table)
     g_board.open = true;
@@ -362,12 +392,12 @@ void CoreSwap(int interval) {
         LimitSwapInterval(paced);
     });
     if (!g_board.open) return;  // (closed by another thread meanwhile)
-    RenderSwap(interval);
+    const bool shown = RenderSwap(interval);
     WindowPump();
-    // Minimized (Alt+Tab): nothing is shown, and the swap doesn't wait for the display: a
-    // refresh's time waited instead, else the game's loop took a whole core (all of it with
-    // cpus=1).
-    if (g_board.open && g_board.hwnd && IsIconic(g_board.hwnd)) unlocked([] { Sleep(16); });
+    // Nothing shown (minimized by Alt+Tab, the device lost): the swap didn't wait for the
+    // display, so a refresh's time is waited instead, without the lock (else the game's loop
+    // took a whole core, all of it with cpus=1, and its window's thread waited for the lock).
+    if (!shown && g_board.open) unlocked([] { Sleep(16); });
 }
 
 FxU32 CoreTexMaxAddress(GrChipID_t tmu) {

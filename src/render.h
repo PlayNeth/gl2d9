@@ -23,8 +23,9 @@ void RenderStippleAdvance(unsigned pixels);
 void RenderTriangles(const RVtx* v, int n);
 // grBufferClear: the draw buffer within the clip window, as the write masks allow.
 void RenderClear(FxU32 argb, FxU8 alpha, FxU16 depth);
-// grBufferSwap: the back buffer shown.
-void RenderSwap(int interval);
+// grBufferSwap: the back buffer shown. False: nothing could be shown (minimized, the device
+// lost or being made again).
+bool RenderSwap(int interval);
 void RenderFlush();  // draws what is batched (before the state or the texture memory changes)
 void RenderSetGamma(float gamma);
 // The window was moved, resized or activated: its picture redrawn.
@@ -33,6 +34,10 @@ void RenderRefresh();
 // The texture memory or a table was written: what is batched drawn first, the textures
 // looked at again.
 void RenderTexturesChanged();
+
+// After a call failed (CallFailed): what it had batched dropped, and memory given back (the
+// spare textures, and those not used for a second) for the next call.
+void RenderRecover();
 
 // The linear frame buffer. Reads a color buffer (front or back) at the game's resolution as ARGB.
 bool RenderReadBuffer(int buffer, std::vector<FxU32>* out);

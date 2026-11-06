@@ -23,6 +23,7 @@ Glide 2 (`glide2x.dll`; `g21win` loads `glide.dll`):
 | `g21win` | Glide 2.1's `grSstOpen` with no window given: the game's own window is used | the picture in the game's window |
 | `wbz` | W buffer: depth read back against MAME's formula; coplanar decals with depth bias at three distances | prints `read` equal to `MAME`; green decals on the left, none on the right |
 | `pfl` | `PREFOG_COLOR` blending through a frame buffer write and a triangle | two purple squares; prints `801f` for both |
+| `focus` | its own window drawn to from the window's thread, or (`focus thread`) from another as Unreal does, through focus changes (Alt+Tab, minimize) done from outside | prints the frames each second; the picture comes back after each focus change, minimized while away |
 | `ovl` | overlays (`overlaybias`): an additive light on a road cut into other triangles, its depth a little off, Z and W buffer | the light patches clean, no road showing through |
 
 Glide 3 (`glide3x.dll`):

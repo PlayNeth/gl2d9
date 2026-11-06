@@ -56,7 +56,7 @@ Set `log=1` in `gl2d9.ini` and start the game. `gl2d9.log` appears next to the g
 
 - **Windows:** delete the Glide DLL you copied from the game's folder.
 - **Wine / Proton:** `WINEPREFIX=~/Games/foo ./install-gl2d9.sh uninstall` removes gl2d9's DLLs from the prefix and puts back any it kept. It keeps `gl2d9.ini`.
-- You can also delete `gl2d9.ini`, `gl2d9.log` and `gl2d9.shaders`. Screenshots stay in `screenshots\` next to the game.
+- You can also delete `gl2d9.ini`, `gl2d9.log` and `gl2d9.shaders`.
 
 ---
 
@@ -77,7 +77,7 @@ Set `log=1` in `gl2d9.ini` and start the game. `gl2d9.log` appears next to the g
 - **Higher resolution:** `scale` draws the game up to 8 times larger on the GPU (2: 640×480 at 1280×960).
 - **`voodoolook`:** the picture dithered to 16 bits with the Voodoo's 4×4 dither.
 - **V-sync as the game asks,** through `grBufferSwap`'s interval, unless `vsync` forces it.
-- **Screenshots with F12,** since Windows' capture tools may show the picture black.
+- **Recorders and overlays work** (OBS's game capture, Steam's overlay, RTSS): the picture is presented as an ordinary windowed Direct3D 9 game's, its back buffer the window's size.
 
 ### Options beyond the original
 
@@ -145,7 +145,6 @@ A `[gl2d9]` section applies to every game, and a `[game.exe]` section overrides 
 | `fbmemory` | `4`; `1`–`16`: frame buffer memory reported, MB |
 | `fpslimit` | `0` (off); frames per second at most, paced at the buffer swap |
 | `cpus` | `1`: the game runs on one processor; `0`: all |
-| `screenshotkey` | `f12`; `f1`–`f12`, `printscreen`, `scrolllock`, `pause`, `none` |
 | `filterresolutions` | `on`: Unreal-engine resolution lists trimmed to the monitor's modes; `off` |
 | `shadercache` | `on`: compiled shaders kept in `gl2d9.shaders` next to the DLL; `off` |
 | `d3d9` | `system` (Windows' own `d3d9.dll`), `game` (the one in the game's folder, such as DXVK's) |
@@ -163,7 +162,6 @@ A `[gl2d9]` section applies to every game, and a `[game.exe]` section overrides 
 | `install-gl2d9.sh` | Linux: installs gl2d9 into a Wine or Proton prefix, or removes it. |
 | `gl2d9.log` | Next to the game's exe, with `log=1` or more. Send it with any bug report. |
 | `gl2d9.shaders` | The compiled shaders, next to the DLL (`shadercache`). Safe to delete. |
-| `screenshots\` | Screenshots (24-bit BMP), next to the game's exe. |
 
 ## Troubleshooting
 
@@ -173,7 +171,8 @@ A `[gl2d9]` section applies to every game, and a `[game.exe]` section overrides 
 - **Hatched light maps, headlights or decals on the road:** raise `overlaybias`.
 - **The game crashes once it has loaded many textures:** check `tmumemory`; `auto` gives Glide 2 games a Voodoo2's 4 MB per TMU.
 - **An Unreal-engine game offers resolutions the monitor can't show:** keep `filterresolutions=on`.
-- **Recordings or screenshots come out black:** use the screenshot key (F12 by default).
+- **Recordings come out black or cut off:** use OBS's Game Capture (or Window Capture with the Windows 10 capture method) on the game's window; gl2d9 1.1.0 and later present it as any windowed Direct3D 9 game does.
+- **An Unreal-engine game stutters:** try `cpus=0` in a section for its exe (`[UnrealTournament.exe]`): with `cpus=1` its threads, and a recorder's, share one processor.
 - **Something else:** set `log=1` (or `2` for every Glide call) and please report the problem with `gl2d9.log`.
 
 ## Building from source

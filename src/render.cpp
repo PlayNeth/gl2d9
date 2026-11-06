@@ -70,6 +70,7 @@ struct TexEntry {
 struct SpareTex {
     IDirect3DTexture9* tex;
     int w, h, levels;
+    size_t bytes;
 };
 
 struct Renderer {
@@ -81,7 +82,19 @@ struct Renderer {
     bool defaultInterval = false;  // (a fallback: D3DPRESENT_INTERVAL_DEFAULT)
     bool ex = false;               // a Direct3D 9Ex device (where Windows refused a 9 one)
     DWORD anisoLimit = 0;          // anisotropy= within what the GPU can (0: not known yet; 1: none)
-    UINT bbW = 0, bbH = 0;  // the device's back buffer (the largest monitor)
+    // What is presented: a back buffer the size of the game window's client area, shown whole
+    // in it, as capture and overlay tools (OBS, Steam, RTSS) expect of a windowed Direct3D 9
+    // game: they hook Present and read or draw on the render target, the window swap chain
+    // 0's. The device's own swap chain on the game's window; on the helper window, an
+    // additional one on the game's (chain).
+    UINT bbW = 0, bbH = 0;
+    IDirect3DSwapChain9* chain = nullptr;
+    UINT chainW = 0, chainH = 0;
+    bool chainRefused = false;  // (then the device's own back buffer, into the game's window as 1.0.2 did)
+    DWORD devThread = 0;     // the thread that made the device (Reset there only)
+    DWORD resetFailedAt = 0;  // the last Reset refused (tried again a quarter second on)
+    unsigned resetFailures = 0;
+    bool remake = false;      // the device to be made anew (removed, hung, or Reset refused too long)
     int scale = 1;
     int w = 0, h = 0;       // the targets' size (the game's resolution times the scale)
     IDirect3DTexture9* color[2] = {};  // front, back
@@ -109,7 +122,8 @@ struct Renderer {
     IDirect3DTexture9* dstCopy = nullptr;  // the target as blending in the shader reads it
     float gamma = 1.0f;
     std::unordered_map<TexKey, TexEntry, TexKeyHash> textures;
-    size_t textureBytes = 0;  // of all of them
+    size_t textureBytes = 0;  // of all of them, the spares' included
+    unsigned trimFrame = ~0u;  // the frame the budget was last enforced in (once a frame)
     std::vector<SpareTex> spares;
     unsigned frame = 0;
     // The batch: triangles drawn with one state.
@@ -248,7 +262,7 @@ void DiagnoseCreateDevice() {
         CloseHandle(snap);
         GL_LOG("diagnosis: modules: %s", list.c_str());
     }
-    // Other ways. (Each made on gl2d9's own window, the back buffer the largest monitor's.)
+    // Other ways. (Each made on gl2d9's own window, the back buffer the game window's size.)
     struct Way {
         const char* what;
         DWORD flags;
@@ -300,8 +314,8 @@ void DiagnoseCreateDevice() {
     const bool hadDevice = g_r.dev != nullptr;
     if (tryParams("interval default", pp, true) && !hadDevice) g_r.defaultInterval = true;
     pp = Params();
-    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
-    tryParams("swap effect discard", pp, false);
+    pp.SwapEffect = D3DSWAPEFFECT_COPY;
+    tryParams("swap effect copy", pp, false);
     pp = Params();
     pp.BackBufferWidth = pp.BackBufferHeight = 0;
     tryParams("back buffer of the window's size", pp, false);
@@ -311,27 +325,12 @@ void DiagnoseCreateDevice() {
     GL_LOG("diagnosis: %s", g_r.dev ? "a device made another way: used" : "no way gave a device");
 }
 
-BOOL CALLBACK AddMonitor(HMONITOR m, HDC, RECT*, LPARAM p) {
-    SIZE* s = reinterpret_cast<SIZE*>(p);
-    MONITORINFOEXW mi = {};
-    mi.cbSize = sizeof(mi);
-    if (GetMonitorInfoW(m, &mi)) {
-        s->cx = std::max(s->cx, mi.rcMonitor.right - mi.rcMonitor.left);
-        s->cy = std::max(s->cy, mi.rcMonitor.bottom - mi.rcMonitor.top);
-        DEVMODEW dm = {};
-        dm.dmSize = sizeof(dm);
-        if (EnumDisplaySettingsW(mi.szDevice, ENUM_REGISTRY_SETTINGS, &dm)) {
-            s->cx = std::max(s->cx, LONG(dm.dmPelsWidth));
-            s->cy = std::max(s->cy, LONG(dm.dmPelsHeight));
-        }
-    }
-    return TRUE;
-}
-
 D3DPRESENT_PARAMETERS Params() {
     D3DPRESENT_PARAMETERS pp = {};
     pp.Windowed = TRUE;
-    pp.SwapEffect = D3DSWAPEFFECT_COPY;  // (Present takes a source rectangle)
+    // The whole back buffer drawn every Present. (The helper's own: copy, for a part of it
+    // presented into the game's window where a swap chain there is refused.)
+    pp.SwapEffect = g_r.deviceWindow && g_r.deviceWindow == g_r.helper ? D3DSWAPEFFECT_COPY : D3DSWAPEFFECT_DISCARD;
     // The desktop's format, whatever it is (a windowed back buffer must suit it: a game run
     // with "reduced color mode" has a 16-bit desktop). The buffers drawn into are 32-bit.
     pp.BackBufferFormat = D3DFMT_UNKNOWN;
@@ -342,6 +341,16 @@ D3DPRESENT_PARAMETERS Params() {
     pp.PresentationInterval = g_config.vsync == kVSyncOff ? D3DPRESENT_INTERVAL_IMMEDIATE : D3DPRESENT_INTERVAL_ONE;
     if (g_r.defaultInterval) pp.PresentationInterval = D3DPRESENT_INTERVAL_DEFAULT;
     return pp;
+}
+
+// The size to present at: the game window's client area (kept while it is minimized or has
+// none), within what a back buffer can be.
+SIZE PresentSize() {
+    RECT c = {};
+    if (g_r.hwnd && !IsIconic(g_r.hwnd) && GetClientRect(g_r.hwnd, &c) && c.right > 0 && c.bottom > 0)
+        return SIZE{std::min<LONG>(c.right, 16384), std::min<LONG>(c.bottom, 16384)};
+    if (g_r.bbW && g_r.bbH) return SIZE{LONG(g_r.bbW), LONG(g_r.bbH)};
+    return SIZE{std::max(g_board.screenW, 1), std::max(g_board.screenH, 1)};
 }
 
 void ReleaseTextures() {
@@ -363,13 +372,22 @@ void DropTexture(std::unordered_map<TexKey, TexEntry, TexKeyHash>::iterator it) 
     TexEntry& e = it->second;
     if (e.tex) {
         if (g_r.spares.size() < kMaxSpares) {
-            g_r.spares.push_back({e.tex, e.w, e.h, e.levels});
-        } else {
-            e.tex->Release();
+            g_r.spares.push_back({e.tex, e.w, e.h, e.levels, e.bytes});  // (still counted)
+            g_r.textures.erase(it);
+            return;
         }
+        e.tex->Release();
     }
     g_r.textureBytes -= std::min(g_r.textureBytes, e.bytes);
     g_r.textures.erase(it);
+}
+
+void DropSpares() {
+    for (const SpareTex& sp : g_r.spares) {
+        sp.tex->Release();
+        g_r.textureBytes -= std::min(g_r.textureBytes, sp.bytes);
+    }
+    g_r.spares.clear();
 }
 
 void TrimTextures(unsigned maxAge, size_t budget) {
@@ -379,8 +397,15 @@ void TrimTextures(unsigned maxAge, size_t budget) {
         it = next;
     }
     if (g_r.textureBytes <= budget) return;
+    // Over budget still: the spares first (nothing uses them), then the least recently used,
+    // down to three quarters of it. Once a frame at most: textures all in use this frame
+    // can't go, and trying again for each new one sorted them all each time (a stutter
+    // growing with the cache: Unreal's light maps, new at new addresses).
+    if (g_r.trimFrame == g_r.frame) return;
+    g_r.trimFrame = g_r.frame;
+    DropSpares();
+    if (g_r.textureBytes <= budget / 4 * 3) return;
     GL_STUB("texture budget reached: least recently used textures dropped");
-    // Over budget still: oldest first, down to three quarters of it.
     std::vector<std::pair<unsigned, TexKey>> byAge;
     byAge.reserve(g_r.textures.size());
     for (auto& e : g_r.textures) byAge.push_back({e.second.lastUse, e.first});
@@ -511,12 +536,99 @@ bool MakeTargets() {
     return true;
 }
 
+void ReleaseChain() {
+    if (g_r.chain) g_r.chain->Release(), g_r.chain = nullptr;
+    g_r.chainW = g_r.chainH = 0;
+}
+
+// The device Reset at the size PresentSize gives (lost, or the window resized). Whatever is
+// in video memory goes first (Reset refuses a device with any alive: gl2d9's targets, the
+// swap chain on the game window; a hook's own, such as OBS's capture texture, are its to
+// free in its Reset hook). A refusal is logged with its code, and tried again a quarter
+// second on at the soonest: never a black picture with nothing said. The front buffer is
+// kept across it where the device can still read it (a resize: the picture stays).
+bool ResetDevice(const char* why) {
+    IDirect3DDevice9* d = g_r.dev;
+    const DWORD now = GetTickCount();
+    if (g_r.resetFailures && now - g_r.resetFailedAt < 250) return false;
+    // The front buffer, read back while it can be.
+    IDirect3DSurface9* keep = nullptr;
+    if (g_r.color[0] && d->TestCooperativeLevel() == D3D_OK) {
+        IDirect3DSurface9* src = nullptr;
+        if (SUCCEEDED(g_r.color[0]->GetSurfaceLevel(0, &src))) {
+            if (FAILED(
+                    d->CreateOffscreenPlainSurface(g_r.w, g_r.h, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &keep, nullptr)) ||
+                FAILED(d->GetRenderTargetData(src, keep))) {
+                if (keep) keep->Release();
+                keep = nullptr;
+            }
+            src->Release();
+        }
+    }
+    // What the device itself holds goes too (bound, a Direct3D 9 device's render targets and
+    // textures in the default pool stayed alive, and Reset refused).
+    for (DWORD i = 0; i < 8; i++) d->SetTexture(i, nullptr);
+    d->SetDepthStencilSurface(nullptr);
+    IDirect3DSurface9* bb = nullptr;
+    if (SUCCEEDED(d->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) {
+        d->SetRenderTarget(0, bb);
+        bb->Release();
+    }
+    ReleaseChain();
+    ReleaseTargets();
+    const SIZE size = PresentSize();
+    g_r.bbW = UINT(size.cx), g_r.bbH = UINT(size.cy);
+    D3DPRESENT_PARAMETERS pp = Params();
+    const HRESULT hr = d->Reset(&pp);
+    if (FAILED(hr)) {
+        g_r.resetFailedAt = now;
+        // Logged the first time, then every 40th (about every ten seconds).
+        if (g_r.resetFailures++ % 40 == 0)
+            GL_LOG("device: Reset (%s, %ux%u) refused: 0x%08lx%s", why, g_r.bbW, g_r.bbH,
+                   static_cast<unsigned long>(hr), g_r.resetFailures > 1 ? " (still)" : "");
+        if (keep) keep->Release();
+        // Refused for two seconds: something else holds video memory on the device (a
+        // capture or overlay hook not freeing its own in its Reset hook). A new device holds
+        // none of it, and the hook starts again on it.
+        if (g_r.resetFailures >= 8) g_r.remake = true;
+        return false;
+    }
+    if (g_r.resetFailures) GL_LOG("device: Reset (%s) done after %u refusal(s)", why, g_r.resetFailures);
+    else GL_LOG("device: Reset (%s): back buffer %ux%u", why, g_r.bbW, g_r.bbH);
+    g_r.resetFailures = 0;
+    const bool made = MakeTargets();
+    if (made && keep) {
+        IDirect3DSurface9* dst = nullptr;
+        if (SUCCEEDED(g_r.color[0]->GetSurfaceLevel(0, &dst))) {
+            d->UpdateSurface(keep, nullptr, dst, nullptr);
+            dst->Release();
+        }
+    }
+    if (keep) keep->Release();
+    return made;
+}
+
 // Device lost (another program's mode change, the lock screen): back when it can be Reset.
 // Targets missing (a Reset or their making failed before): made again, at most every quarter
 // second (else the screen stayed black until the game opened Glide again).
+bool RemakeDevice();
+
 bool DeviceUsable() {
+    // Made anew, from the thread that made it (it is that thread's), where it must be.
+    if (g_r.remake) return GetCurrentThreadId() == g_r.devThread && RemakeDevice();
     if (!g_r.dev) return false;
-    const HRESULT hr = g_r.dev->TestCooperativeLevel();
+    HRESULT hr = g_r.dev->TestCooperativeLevel();
+    // 9Ex devices aren't lost (TestCooperativeLevel always succeeds): removed or hung is
+    // what can happen to them.
+    if (g_r.ex && SUCCEEDED(hr)) {
+        hr = static_cast<IDirect3DDevice9Ex*>(g_r.dev)->CheckDeviceState(g_r.deviceWindow);
+        if (hr == D3DERR_DEVICEREMOVED || hr == D3DERR_DEVICEHUNG) {
+            GL_LOG("device: %s: made anew", hr == D3DERR_DEVICEREMOVED ? "removed" : "hung");
+            g_r.remake = true;
+            return false;
+        }
+        if (SUCCEEDED(hr)) hr = D3D_OK;  // (occluded, a mode change: drawn anyway)
+    }
     if (hr == D3D_OK) {
         if (g_r.color[0]) return true;
         static DWORD triedAt;
@@ -527,21 +639,15 @@ bool DeviceUsable() {
         GL_LOG("render targets made again");
         return true;
     }
-    if (hr != D3DERR_DEVICENOTRESET) return false;
-    // What the device itself holds goes too (bound, a Direct3D 9 device's render targets and
-    // textures in the default pool stayed alive, and Reset refused).
-    for (DWORD i = 0; i < 8; i++) g_r.dev->SetTexture(i, nullptr);
-    g_r.dev->SetDepthStencilSurface(nullptr);
-    IDirect3DSurface9* bb = nullptr;
-    if (SUCCEEDED(g_r.dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) {
-        g_r.dev->SetRenderTarget(0, bb);
-        bb->Release();
+    if (hr == D3DERR_DRIVERINTERNALERROR) {
+        GL_LOG("device: driver internal error: made anew");
+        g_r.remake = true;
+        return false;
     }
-    ReleaseTargets();
-    D3DPRESENT_PARAMETERS pp = Params();
-    if (FAILED(g_r.dev->Reset(&pp))) return false;
-    GL_LOG("device reset after a loss");
-    return MakeTargets();
+    // Reset by the thread that made the device (from another, such as the window's while it
+    // repaints, the next frame of the game's does it).
+    if (hr != D3DERR_DEVICENOTRESET || GetCurrentThreadId() != g_r.devThread) return false;
+    return ResetDevice("device lost");
 }
 
 // ---------------------------------------------------------------- state from the registers
@@ -638,6 +744,7 @@ IDirect3DTexture9* BindTexture(int tmu) {
             const SpareTex& sp = g_r.spares[i];
             if (sp.w == d.width && sp.h == d.height && sp.levels == levels) {
                 e.tex = sp.tex;
+                g_r.textureBytes -= std::min(g_r.textureBytes, sp.bytes);  // (counted again below)
                 g_r.spares[i] = g_r.spares.back();
                 g_r.spares.pop_back();
                 break;
@@ -652,9 +759,14 @@ IDirect3DTexture9* BindTexture(int tmu) {
         e.bytes = size_t(d.width) * d.height * 4 * 4 / 3 * 2;  // the mipmaps, twice (managed)
         g_r.textureBytes += e.bytes;
     }
-    e.spanStart = d.spanStart;
-    e.source.assign(src, src + srcLen);
-    e.gen = gen;
+    // What it was decoded from, kept once it is (a decode cut short by a failed allocation,
+    // CallFailed, is done again at the next use rather than taken as current).
+    auto decoded = [&] {
+        e.source.assign(src, src + srcLen);
+        e.spanStart = d.spanStart;
+        e.gen = gen;
+        return e.tex;
+    };
     if (!d.tsplit) {  // decoded straight into the texture
         for (int i = 0; i < levels; i++) {
             D3DLOCKED_RECT lr;
@@ -662,7 +774,7 @@ IDirect3DTexture9* BindTexture(int tmu) {
             DecodeLevel(d, d.lodMin + i, static_cast<FxU32*>(lr.pBits), lr.Pitch / 4);
             e.tex->UnlockRect(i);
         }
-        return e.tex;
+        return decoded();
     }
     std::vector<FxU32> prev;  // the level above, for one of the other parity (made from it)
     int prevW = 0, prevH = 0;
@@ -692,7 +804,7 @@ IDirect3DTexture9* BindTexture(int tmu) {
         prevW = lw;
         prevH = lh;
     }
-    return e.tex;
+    return decoded();
 }
 
 // The draw buffer, the depth buffer, the viewport and the clip window (always on: Glide
@@ -940,10 +1052,10 @@ bool RenderOpen(HWND hwnd) {
     g_r.scale = std::clamp(g_config.scale, 1, 8);
     g_r.w = g_board.screenW * g_r.scale;
     g_r.h = g_board.screenH * g_r.scale;
-    SIZE big = {g_board.screenW, g_board.screenH};
-    EnumDisplayMonitors(nullptr, nullptr, AddMonitor, reinterpret_cast<LPARAM>(&big));
-    g_r.bbW = UINT(big.cx);
-    g_r.bbH = UINT(big.cy);
+    const SIZE first = WindowClientSize();  // (the window may still be on its way there)
+    g_r.bbW = UINT(first.cx);
+    g_r.bbH = UINT(first.cy);
+    g_r.devThread = GetCurrentThreadId();
     g_r.d3d = CreateD3D9();
     if (!g_r.d3d) {
         GL_LOG("no Direct3D 9");
@@ -991,7 +1103,7 @@ bool RenderOpen(HWND hwnd) {
     }
     if (!g_r.dev) {
         // Direct3D 9Ex, the same ways.
-        g_r.bbW = UINT(big.cx), g_r.bbH = UINT(big.cy);
+        g_r.bbW = UINT(first.cx), g_r.bbH = UINT(first.cy);
         if (IDirect3D9Ex* ex = CreateD3D9Ex()) {
             for (int attempt = 0; attempt < 4 && !g_r.dev; attempt++) {
                 const bool onHelper = attempt >= 2;
@@ -1054,8 +1166,13 @@ void RenderClose() {
     for (auto& e : g_r.lfbShaders)
         if (e.second) e.second->Release();
     g_r.lfbShaders.clear();
+    ReleaseChain();
+    g_r.chainRefused = false;
     if (g_r.dev) g_r.dev->Release(), g_r.dev = nullptr;
     if (g_r.d3d) g_r.d3d->Release(), g_r.d3d = nullptr;
+    g_r.bbW = g_r.bbH = 0;
+    g_r.resetFailures = 0;
+    g_r.remake = false;  // (RemakeDevice asks again itself where its RenderOpen fails)
     WindowDestroyHelper(g_r.helper);
     g_r.helper = g_r.deviceWindow = nullptr;
     g_r.defaultInterval = false;
@@ -1064,8 +1181,37 @@ void RenderClose() {
     g_r.hwnd = nullptr;
 }
 
+namespace {
+// The device made anew on the game's window (Renderer::remake): everything on it goes and is
+// made again (textures are decoded again from the texture memory as they are used; the frame
+// buffer starts black, as after a loss). Tried at most once a second.
+bool RemakeDevice() {
+    static DWORD triedAt;
+    const DWORD now = GetTickCount();
+    if (triedAt && now - triedAt < 1000) return false;
+    triedAt = now | 1;
+    HWND hwnd = g_r.hwnd;
+    static unsigned failures;
+    if (!failures) GL_LOG("device: made anew");
+    g_r.remake = false;
+    if (!RenderOpen(hwnd)) {
+        // Tried again a second on (RenderOpen left no device: kept asking for one).
+        if (!failures++) GL_LOG("device: could not be made anew: tried again each second");
+        g_r.hwnd = hwnd;
+        g_r.remake = true;
+        return false;
+    }
+    if (failures) GL_LOG("device: made anew after %u tries", failures + 1);
+    failures = 0;
+    return g_r.color[0] != nullptr;
+}
+}  // namespace
+
 // (The targets lost to a failed Reset: made again here, DeviceUsable.)
-bool RenderReady() { return g_r.dev && (g_r.color[0] || (DeviceUsable() && g_r.color[0])); }
+bool RenderReady() {
+    if (!g_r.dev && !g_r.remake) return false;
+    return (g_r.dev && g_r.color[0]) || (DeviceUsable() && g_r.color[0]);
+}
 
 // ---------------------------------------------------------------- drawing
 
@@ -1158,19 +1304,23 @@ void RenderFlush() {
 constexpr bool kStippleRotateLeft = true;  // (false: current MAME's direction, pixel k tests bit k)
 
 namespace {
+// (A coordinate far off the screen, or not a number, as one just off it: converted to an int,
+// an out-of-range float is undefined.)
+float InRange(float v) { return v == v ? std::clamp(v, -1.0e7f, 1.0e7f) : 0.0f; }
 int RoundCoordinate(float v) {
+    v = InRange(v);
     const float ip = std::floor(v);
     return int(ip) + ((v - ip) > 0.5f ? 1 : 0);
 }
 float Snap16(float v) {  // the FIFO's float to 12.4 fixed point (MAME's float_to_int32: toward zero)
-    return float(int(v * 16.0f)) * (1.0f / 16.0f);
+    return float(int(InRange(v) * 16.0f)) * (1.0f / 16.0f);
 }
 }  // namespace
 
 // The rows of a triangle (three vertices) into stipRows; first: its first entry and scanline.
 // One empty row above and below the Voodoo's: Direct3D's rows of the triangle may reach one
 // further, and those pixels aren't drawn.
-void StippleRows(const RVtx* t, const Regs& r, float* firstEntry, float* firstScan) {
+static void StippleRows(const RVtx* t, const Regs& r, float* firstEntry, float* firstScan) {
     struct P {
         float x, y;
     } a = {Snap16(t[0].x), Snap16(t[0].y)}, b = {Snap16(t[1].x), Snap16(t[1].y)}, c = {Snap16(t[2].x), Snap16(t[2].y)};
@@ -1184,7 +1334,8 @@ void StippleRows(const RVtx* t, const Regs& r, float* firstEntry, float* firstSc
     }
     const int W = g_board.screenW, H = g_board.screenH;
     const int v1y = RoundCoordinate(v1->y), v3y = RoundCoordinate(v3->y);
-    const int y0 = std::max(v1y, 0), y1 = std::min(v3y, H);
+    // (Within the screen, both: a triangle far below it had rows counted up to it.)
+    const int y0 = std::clamp(v1y, 0, H), y1 = std::clamp(v3y, 0, H);
     const float d12 = v2->y == v1->y ? 0.0f : (v2->x - v1->x) / (v2->y - v1->y);
     const float d13 = v3->y == v1->y ? 0.0f : (v3->x - v1->x) / (v3->y - v1->y);
     const float d23 = v3->y == v2->y ? 0.0f : (v3->x - v2->x) / (v3->y - v2->y);
@@ -1331,16 +1482,59 @@ namespace {
 bool MakeTexture(IDirect3DTexture9** tex, int w, int h, DWORD usage, D3DFORMAT fmt, D3DPOOL pool);
 void PointSampler(int stage);
 
-// The front buffer into the window.
-void Present() {
+// The back buffer that goes into the game's window: the device's own, or the swap chain made
+// on the game's window when the device is on the helper (null: none to be had).
+IDirect3DSurface9* PresentTarget(const SIZE& size) {
+    IDirect3DDevice9* d = g_r.dev;
+    IDirect3DSurface9* bb = nullptr;
+    if (g_r.deviceWindow == g_r.hwnd || g_r.chainRefused) {
+        if (FAILED(d->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) bb = nullptr;
+        return bb;
+    }
+    if (g_r.chain && (g_r.chainW != UINT(size.cx) || g_r.chainH != UINT(size.cy))) ReleaseChain();
+    if (!g_r.chain) {
+        D3DPRESENT_PARAMETERS pp = Params();
+        pp.BackBufferWidth = UINT(size.cx);
+        pp.BackBufferHeight = UINT(size.cy);
+        pp.hDeviceWindow = g_r.hwnd;
+        pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+        const HRESULT hr = d->CreateAdditionalSwapChain(&pp, &g_r.chain);
+        if (FAILED(hr)) {
+            // (Refused too, as the device was: shown from the device's own back buffer.)
+            GL_LOG("device: a swap chain on the game window (%ldx%ld) refused: 0x%08lx; presenting into it from "
+                   "the helper's", size.cx, size.cy, static_cast<unsigned long>(hr));
+            g_r.chain = nullptr;
+            g_r.chainRefused = true;
+            if (FAILED(d->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) bb = nullptr;
+            return bb;
+        }
+        g_r.chainW = UINT(size.cx), g_r.chainH = UINT(size.cy);
+    }
+    if (FAILED(g_r.chain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &bb))) bb = nullptr;
+    return bb;
+}
+
+// The front buffer into the window, the back buffer its client area's size and presented
+// whole (see Renderer::bbW). The window resized: the device Reset to its new size, on the
+// thread that made it (from another, such as the window's own repainting, the picture is
+// stretched to it until the game's next frame).
+bool Present() {
     IDirect3DDevice9* d = g_r.dev;
     HWND hwnd = g_r.hwnd;
     RECT client = {};
-    if (!hwnd || !GetClientRect(hwnd, &client) || client.right <= 0 || client.bottom <= 0 || IsIconic(hwnd)) return;
+    if (!hwnd || !GetClientRect(hwnd, &client) || client.right <= 0 || client.bottom <= 0 || IsIconic(hwnd))
+        return false;
     // The targets and states change from here on, whichever way it returns (it returned with
     // voodoolook's target still set, and the next batch drew into it).
     g_r.batchState = false;
-    const UINT cw = std::min<UINT>(UINT(client.right), g_r.bbW), ch = std::min<UINT>(UINT(client.bottom), g_r.bbH);
+    const SIZE want = PresentSize();
+    if (g_r.deviceWindow == hwnd && (UINT(want.cx) != g_r.bbW || UINT(want.cy) != g_r.bbH) &&
+        GetCurrentThreadId() == g_r.devThread && !ResetDevice("window resized"))
+        return false;
+    // (The helper's own back buffer into the game's window: the part of it the client takes.)
+    const bool own = g_r.deviceWindow == hwnd || g_r.chainRefused;
+    const UINT cw = own ? std::min<UINT>(g_r.bbW, g_r.deviceWindow == hwnd ? g_r.bbW : UINT(want.cx)) : UINT(want.cx);
+    const UINT ch = own ? std::min<UINT>(g_r.bbH, g_r.deviceWindow == hwnd ? g_r.bbH : UINT(want.cy)) : UINT(want.cy);
     // voodoolook: the frame dithered to 16 bits first (into look), shown from there.
     IDirect3DTexture9* frame = g_r.color[0];
     if (g_r.ditherPs &&
@@ -1364,8 +1558,8 @@ void Present() {
             frame = g_r.look;
         }
     }
-    IDirect3DSurface9* bb = nullptr;
-    if (FAILED(d->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) return;
+    IDirect3DSurface9* bb = PresentTarget(want);
+    if (!bb) return false;
     d->SetRenderTarget(0, bb);
     d->SetDepthStencilSurface(nullptr);
     const D3DVIEWPORT9 vp = {0, 0, cw, ch, 0.0f, 1.0f};
@@ -1398,89 +1592,27 @@ void Present() {
     DrawQuad(dst, 0.0f);
     d->SetTexture(0, nullptr);
     bb->Release();
-    const RECT src = {0, 0, LONG(cw), LONG(ch)};
-    d->Present(&src, nullptr, hwnd, nullptr);
+    const RECT part = {0, 0, LONG(cw), LONG(ch)};
+    const HRESULT hr = g_r.chain                     ? g_r.chain->Present(nullptr, nullptr, nullptr, nullptr, 0)
+                       : g_r.deviceWindow == hwnd ? d->Present(nullptr, nullptr, nullptr, nullptr)
+                                                  : d->Present(&part, nullptr, hwnd, nullptr);
     g_r.batchState = false;  // (the targets changed)
+    if (hr == D3DERR_DEVICEREMOVED || hr == D3DERR_DEVICEHUNG || hr == D3DERR_DRIVERINTERNALERROR) {
+        GL_LOG("device: Present: 0x%08lx: made anew", static_cast<unsigned long>(hr));
+        g_r.remake = true;
+    }
+    return SUCCEEDED(hr);
 }
 }  // namespace
 
-namespace {
-// The frame just shown (the front buffer, at its own resolution), gamma as shown, into a
-// 24-bit BMP.
-void SaveScreenshot() {
-    IDirect3DDevice9* d = g_r.dev;
-    if (!g_r.readback &&
-        FAILED(d->CreateOffscreenPlainSurface(g_r.w, g_r.h, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &g_r.readback, nullptr))) {
-        g_r.readback = nullptr;
-        return;
-    }
-    IDirect3DSurface9* rt = Target(GR_BUFFER_FRONTBUFFER);
-    const HRESULT hr = rt ? d->GetRenderTargetData(rt, g_r.readback) : E_FAIL;
-    if (rt) rt->Release();
-    if (FAILED(hr)) return;
-    const std::wstring path = ScreenshotPath();
-    if (path.empty()) return;
-    D3DLOCKED_RECT lr;
-    if (FAILED(g_r.readback->LockRect(&lr, nullptr, D3DLOCK_READONLY))) return;
-    FxU8 lut[256];
-    const float k = 1.0f / std::max(0.1f, g_r.gamma);
-    for (int i = 0; i < 256; i++) lut[i] = FxU8(std::lround(std::pow(i / 255.0f, k) * 255.0f));
-    const int w = g_r.w, h = g_r.h, rowBytes = (w * 3 + 3) & ~3;
-    std::vector<FxU8> file(54 + size_t(rowBytes) * h, 0);
-    auto put32 = [&](size_t at, FxU32 v) { memcpy(&file[at], &v, 4); };
-    file[0] = 'B', file[1] = 'M';
-    put32(2, FxU32(file.size()));
-    put32(10, 54);
-    put32(14, 40);
-    put32(18, FxU32(w));
-    put32(22, FxU32(h));
-    file[26] = 1, file[28] = 24;
-    put32(34, FxU32(size_t(rowBytes) * h));
-    for (int y = 0; y < h; y++) {  // (bottom-up)
-        const FxU32* src = reinterpret_cast<const FxU32*>(static_cast<const FxU8*>(lr.pBits) + size_t(y) * lr.Pitch);
-        FxU8* dst = &file[54 + size_t(h - 1 - y) * rowBytes];
-        for (int x = 0; x < w; x++) {
-            dst[x * 3 + 0] = lut[src[x] & 0xFF];
-            dst[x * 3 + 1] = lut[(src[x] >> 8) & 0xFF];
-            dst[x * 3 + 2] = lut[(src[x] >> 16) & 0xFF];
-        }
-    }
-    g_r.readback->UnlockRect();
-    char narrow[MAX_PATH * 3];
-    WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, narrow, sizeof(narrow), nullptr, nullptr);
-    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-    DWORD put = 0;
-    const bool ok = f != INVALID_HANDLE_VALUE && WriteFile(f, file.data(), DWORD(file.size()), &put, nullptr) &&
-                    put == file.size();
-    const DWORD err = ok ? 0 : GetLastError();
-    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
-    if (ok) GL_LOG("screenshot: %s", narrow);
-    else GL_LOG("screenshot: could not write %s (%lu)", narrow, err);
-}
-
-// The screenshot key, pressed (once per press) while the game has the focus.
-bool ScreenshotKeyPressed() {
-    static bool down;
-    if (!g_config.screenshotKey) return false;
-    const bool now = (GetAsyncKeyState(g_config.screenshotKey) & 0x8000) != 0;
-    const bool pressed = now && !down;
-    down = now;
-    if (!pressed) return false;
-    DWORD pid = 0;
-    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
-    return pid == GetCurrentProcessId();
-}
-}  // namespace
-
-void RenderSwap(int interval) {
+bool RenderSwap(int interval) {
     (void)interval;
-    if (!RenderReady()) return;
+    if (!RenderReady()) return false;
     RenderFlush();
-    if (!DeviceUsable()) return;
+    if (!DeviceUsable()) return false;
     std::swap(g_r.color[0], g_r.color[1]);
     g_r.batchState = false;
-    Present();
-    if (ScreenshotKeyPressed()) SaveScreenshot();
+    const bool shown = Present();
     g_r.frame++;
     // Textures not used for a while go (the texture memory still holds them).
     if ((g_r.frame & 15) == 0) TrimTextures(300, kTextureBudget);
@@ -1488,6 +1620,7 @@ void RenderSwap(int interval) {
     if (g_r.frame % 3600 == 0)
         GL_LOG("frame %u: %u textures, %u MB, %u spare", g_r.frame, unsigned(g_r.textures.size()),
                unsigned(g_r.textureBytes >> 20), unsigned(g_r.spares.size()));
+    return shown;
 }
 
 void RenderRefresh() {
@@ -1501,6 +1634,16 @@ void RenderSetGamma(float gamma) { g_r.gamma = gamma > 0 ? gamma : 1.0f; }
 void RenderTexturesChanged() {
     RenderFlush();
     g_r.batchState = false;
+}
+
+void RenderRecover() {
+    g_r.batch.clear();
+    g_r.stipRows.clear();
+    g_r.batchState = false;
+    if (!g_r.dev) return;
+    DropSpares();
+    g_r.trimFrame = ~0u;  // (enforced now, whatever the frame)
+    TrimTextures(60, kTextureBudget / 2);
 }
 
 // ---------------------------------------------------------------- the linear frame buffer

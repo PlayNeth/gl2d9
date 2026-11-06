@@ -361,11 +361,23 @@ void LoadDiskCache() {
         uint32_t bytes;
         memcpy(&hash, &data[at], 8);
         memcpy(&bytes, &data[at + 8], 4);
-        if (bytes % 4 || bytes > data.size() - at - 12) break;
+        if (!bytes || bytes % 4 || bytes > data.size() - at - 12) break;
         std::vector<DWORD> code(bytes / 4);
         memcpy(code.data(), &data[at + 12], bytes);
-        g_disk.code[hash] = std::move(code);
+        g_disk.code[hash] = std::move(code);  // (a later record of the same source wins)
         at += 12 + bytes;
+    }
+    // A record cut short (a crash while writing it): cut off, so the records added after it
+    // can be read (they were lost behind it, compiled again each run).
+    if (at < data.size()) {
+        HANDLE w = CreateFileW(g_disk.path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (w != INVALID_HANDLE_VALUE) {
+            LARGE_INTEGER to;
+            to.QuadPart = LONGLONG(at);
+            if (SetFilePointerEx(w, to, nullptr, FILE_BEGIN)) SetEndOfFile(w);
+            CloseHandle(w);
+        }
     }
     GL_LOG("shaders: %u in the cache (%ls)", unsigned(g_disk.code.size()), g_disk.path.c_str());
 }
@@ -459,10 +471,11 @@ bool ShaderUsesTexture(const ShaderKey& k, int tmu) {
 
 namespace {
 // Bytecode for HLSL source: from the disk cache, or compiled (and added to it). Errors logged.
-bool Bytecode(const std::string& src, UINT flags, std::vector<DWORD>* out) {
+bool Bytecode(const std::string& src, UINT flags, std::vector<DWORD>* out, bool* fromDisk = nullptr) {
     LoadDiskCache();
     const uint64_t hash = SourceHash(src);
     auto cached = g_disk.code.find(hash);
+    if (fromDisk) *fromDisk = cached != g_disk.code.end();
     if (cached != g_disk.code.end()) {
         *out = cached->second;
         return true;
@@ -491,7 +504,17 @@ bool Bytecode(const std::string& src, UINT flags, std::vector<DWORD>* out) {
 IDirect3DPixelShader9* MakeShader(IDirect3DDevice9* dev, const std::string& src, UINT flags) {
     std::vector<DWORD> code;
     IDirect3DPixelShader9* ps = nullptr;
-    if (Bytecode(src, flags, &code) && FAILED(dev->CreatePixelShader(code.data(), &ps))) ps = nullptr;
+    bool fromDisk = false;
+    if (Bytecode(src, flags, &code, &fromDisk) && FAILED(dev->CreatePixelShader(code.data(), &ps))) {
+        ps = nullptr;
+        // Refused from the disk cache (a record damaged on disk): compiled again, once, and
+        // the new one added (else that shader was missing every run from then on).
+        if (fromDisk) {
+            GL_LOG("shaders: a cached shader refused: compiled again");
+            g_disk.code.erase(SourceHash(src));
+            if (Bytecode(src, flags, &code) && FAILED(dev->CreatePixelShader(code.data(), &ps))) ps = nullptr;
+        }
+    }
     return ps;
 }
 }  // namespace

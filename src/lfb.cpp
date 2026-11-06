@@ -126,8 +126,6 @@ FxU32 FromArgb(int mode, FxU32 c, int lanes) {
     }
 }
 
-inline FxU16 To565(FxU32 c) { return pix::ScalarTo565(c); }
-
 bool IsColorBuffer(int buffer) { return buffer == GR_BUFFER_FRONTBUFFER || buffer == GR_BUFFER_BACKBUFFER; }
 // The write modes with a depth value in the upper 16 bits.
 bool HasDepth(int mode) { return mode >= GR_LFBWRITEMODE_565_DEPTH && mode <= GR_LFBWRITEMODE_1555_DEPTH; }
@@ -301,13 +299,18 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
     g_l.writeMode = writeMode;
     g_l.writeOrigin = origin;
     g_l.pipeline = pixelPipeline != FXFALSE;
-    if (g_l.readBuffer >= 0 && PixelBytes(writeMode) == 2) {
-        // Read-locked too: the memory already holds the 16-bit pixels the game may be
-        // changing in place (as one address range). Compared with what it holds now.
-        const size_t n = size_t(StridePixels()) * 2 * g_board.screenH;
-        g_l.snapshot.assign(g_l.mem, g_l.mem + n);
-    } else {
-        FillForWrite();
+    try {
+        if (g_l.readBuffer >= 0 && PixelBytes(writeMode) == 2) {
+            // Read-locked too: the memory already holds the 16-bit pixels the game may be
+            // changing in place (as one address range). Compared with what it holds now.
+            const size_t n = size_t(StridePixels()) * 2 * g_board.screenH;
+            g_l.snapshot.assign(g_l.mem, g_l.mem + n);
+        } else {
+            FillForWrite();
+        }
+    } catch (...) {
+        g_l.writeBuffer = -1;  // (not locked: the call fails, CallFailed, and the next can lock)
+        throw;
     }
     FxU32 m = St().r.lfbMode & ~(SST_LFB_FORMAT | SST_LFB_YORIGIN | SST_LFB_ENPIXPIPE);
     m |= FxU32(writeMode) << SST_LFB_FORMAT_SHIFT;
@@ -329,9 +332,15 @@ FxBool LfbUnlock(GrLock_t type, GrBuffer_t buffer) {
         return FXTRUE;
     }
     if (type != GR_LFB_WRITE_ONLY || g_l.writeBuffer < 0 || g_l.writeBuffer != buffer) return FXFALSE;
+    // Unlocked whatever happens: a commit that fails (memory run out, CallFailed) loses this
+    // lock's writes, but left locked, every later write lock was refused (the game unlocks once).
+    struct Unlock {
+        ~Unlock() {
+            g_l.writeBuffer = -1;
+            g_l.snapshot.clear();
+        }
+    } unlock;
     Commit();
-    g_l.writeBuffer = -1;
-    g_l.snapshot.clear();
     return FXTRUE;
 }
 
@@ -381,7 +390,7 @@ FxBool LfbWriteRegion(GrBuffer_t dst, FxU32 x, FxU32 y, GrLfbSrcFmt_t format, Fx
     if (format == GR_LFB_SRC_FMT_RLE16) {
         // guEncodeRLE16's runs (count << 16 | 565 color, the image as one row), unpacked to
         // 565. (3dfx's own grLfbWriteRegion fails these: "needs to be implemented".)
-        if (!color) return FXFALSE;
+        if (!color || w > 4096 || h > 4096) return FXFALSE;  // (w * h as given, before the clip)
         unpacked.assign(size_t(w) * h, 0);
         const FxU32* run = static_cast<const FxU32*>(src);
         for (size_t at = 0; at < unpacked.size(); run++) {

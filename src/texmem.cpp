@@ -357,7 +357,9 @@ void DecodeLevel(const TexDesc& d, int lod, FxU32* out, int outPitch) {
     for (int y = 0; y < h; y++) {
         FxU32* row = out + size_t(y) * outPitch;
         const size_t a = size_t(addr) + size_t(y) * w * bpp;
-        if (a + size_t(w) * bpp > size) {  // (past the end of the memory: what is there, then 0)
+        // (Past the end of the memory: what is there, then 0. Checked without the sum, which a
+        // level address near 4 GB wraps past.)
+        if (a >= size || size - a < size_t(w) * bpp) {
             for (int x = 0; x < w; x++) {
                 const size_t at = a + size_t(x) * bpp;
                 FxU32 v = 0;

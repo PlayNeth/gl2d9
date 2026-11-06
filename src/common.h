@@ -14,7 +14,7 @@
 
 namespace gl2d9 {
 
-#define GL2D9_VERSION "1.0.2"
+#define GL2D9_VERSION "1.1.0"
 
 enum { kDisplaySwitch, kDisplayWindow, kDisplayBorderless };
 enum { kVSyncAuto, kVSyncOn, kVSyncOff };
@@ -34,7 +34,6 @@ struct Config {
     int fbMB = 4;                      // frame buffer memory reported, MB
     int tmus = 2;                      // texture units reported (1 or 2, every Glide)
     bool shaderCache = true;           // compiled shaders kept in gl2d9.shaders (no compiling next time)
-    int screenshotKey = VK_F12;        // saves the frame shown as a BMP (screenshots\ beside the game); 0: none
     bool filterResolutions = true;     // resolution lists games carry themselves: the monitor's only
     bool voodooLook = false;           // the picture shown dithered to 16 bits, as the Voodoo's was
     int overlayBias = 1;               // passes laid on drawn surfaces pulled forward N depth steps (shader.cpp)
@@ -50,8 +49,6 @@ void LoadConfig(HMODULE self);
 // Where the shader cache goes: beside this DLL, or (that folder not writable) in
 // %LOCALAPPDATA%\gl2d9 under the game's name. Empty: nowhere.
 std::wstring ShaderCachePath();
-// A new file for a screenshot: screenshots\<game>_<date>_<time>.bmp beside the game's executable.
-std::wstring ScreenshotPath();
 
 // ---------------------------------------------------------------- logging
 void LogInit();
@@ -80,5 +77,23 @@ struct Guard {
     Guard(const Guard&) = delete;
     Guard& operator=(const Guard&) = delete;
 };
+
+// An export's call that failed with a C++ exception (memory run out: a 32-bit game's address
+// space, Unreal's): logged, what it left half done dropped, and the call returned as failed.
+// The exception must not reach the game: it can't unwind through the game's frames (the game
+// aborted, "requested the Runtime to terminate"). Called from the export's handler, after
+// the lock was released by unwinding. With a value: that returned (the call's failure).
+void CallFailed(const char* where);
+template <class T>
+T CallFailed(const char* where, T value) {
+    CallFailed(where);
+    return value;
+}
+// The handler of an export's function-try-block: GLAPI void grFoo() try { ... } GL_FAIL(), and
+// with the value returned on failure, GLAPI FxBool grBar() try { ... } GL_FAIL_RETURN(FXFALSE).
+#define GL_FAIL() \
+    catch (...) { ::gl2d9::CallFailed(__func__); }
+#define GL_FAIL_RETURN(value) \
+    catch (...) { return ::gl2d9::CallFailed(__func__, value); }
 
 }  // namespace gl2d9

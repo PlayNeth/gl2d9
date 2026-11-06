@@ -142,22 +142,55 @@ void Windowed() {
     PlaceWindow(HWND_NOTOPMOST, RECT{x, y, x + w, y + h}, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 }
 
+// The picture drawn again where nothing else is drawing (a game drawing on another thread
+// presents its next frame anyway).
+void RefreshIfFree() {
+    if (!TryEnterCriticalSection(&g_lock)) return;
+    if (g_board.open) RenderRefresh();
+    LeaveCriticalSection(&g_lock);
+}
+
+// Focus lost or back (WM_ACTIVATEAPP), on the window's own thread. Without gl2d9's lock: a
+// game drawing on another thread holds it most of the time (through Present, waiting for
+// the display), and the focus change, waiting for it, was dropped (Unreal: the window left
+// over the desktop, or minimized for good). What this changes is the window's, on its own
+// thread; the device, lost by a mode change, is Reset by the thread that draws.
 void Activate(bool active) {
-    if (g_w.display == kDisplayWindow || !g_w.hwnd) return;
+    if (g_w.display == kDisplayWindow || !g_w.hwnd || !g_board.open) return;
     if (!active && !g_w.suspended) {
         GL_LOG("focus lost: %s", g_w.switched ? "desktop mode restored, minimized" : "minimized");
         g_w.suspended = true;
         RestoreMode();
         PlaceWindow(HWND_NOTOPMOST, RECT{}, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        ShowWindowAsync(g_w.hwnd, SW_MINIMIZE);
+        ShowWindow(g_w.hwnd, SW_MINIMIZE);
     } else if (active && g_w.suspended) {
         GL_LOG("focus back");
         g_w.suspended = false;
         if (IsIconic(g_w.hwnd)) ShowWindow(g_w.hwnd, SW_RESTORE);
+        // (The game's own procedure, restoring, may have closed Glide: no mode switched for it.)
+        if (!g_board.open || !g_w.hwnd) return;
         if (g_w.display == kDisplaySwitch) g_w.switched = SwitchMode();
         Cover();
-        RenderRefresh();
+        RefreshIfFree();
     }
+}
+
+// The window covered or made a window (as display= says), on its own thread: from another
+// (a game opening Glide on its drawing thread), asked of it (ShowMsg), so that gl2d9's own
+// moves are known as such there (quiet) and no thread waits for the other with the lock held.
+UINT ShowMsg() {
+    static const UINT msg = RegisterWindowMessageW(L"gl2d9 show");
+    return msg;
+}
+void ShowNow() {
+    if (g_w.display == kDisplayWindow) Windowed();
+    else Cover();
+}
+void Show() {
+    if (g_w.hooked && GetWindowThreadProcessId(g_w.hwnd, nullptr) != GetCurrentThreadId() && ShowMsg() &&
+        PostMessageW(g_w.hwnd, ShowMsg(), 0, 0))
+        return;
+    ShowNow();
 }
 
 // Windows gl2d9 couldn't unhook (something subclassed them after it, dd2d9 for a game's
@@ -195,11 +228,6 @@ LONG_PTR SetProc(HWND h, bool unicode, LONG_PTR proc) {
 
 LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp);
 
-UINT DeferredActivateMsg() {
-    static const UINT msg = RegisterWindowMessageW(L"gl2d9 deferred WM_ACTIVATEAPP");
-    return msg;
-}
-
 // The window procedure gl2d9 puts in front of the game's. Nested more than 200 deep on one
 // thread it can only be calling itself round a loop of subclasses (two HookProcs in one chain,
 // which StaleHook prevents): logged once and broken there, rather than the stack overflowing
@@ -214,25 +242,24 @@ LRESULT CALLBACK HookProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return IsWindowUnicode(h) ? DefWindowProcW(h, msg, wp, lp) : DefWindowProcA(h, msg, wp, lp);
     }
     depth++;
-    const LRESULT r = HookProcBody(h, msg, wp, lp);
+    LRESULT r;
+    try {
+        r = HookProcBody(h, msg, wp, lp);
+    } catch (...) {
+        // (Not into Windows' frames either: the message left to Windows, as on a failed call.
+        // The game's own procedure throwing (Visual C++'s exceptions) isn't caught here.)
+        depth--;
+        CallFailed("the window procedure");
+        return IsWindowUnicode(h) ? DefWindowProcW(h, msg, wp, lp) : DefWindowProcA(h, msg, wp, lp);
+    }
     depth--;
     return r;
 }
 
 LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    // gl2d9's own retry of a WM_ACTIVATEAPP (wParam: active; lParam: tries so far, up to
-    // 500): never the game's. The focus at the time it runs decides, not the one posted.
-    if (const UINT again = DeferredActivateMsg(); again && msg == again) {
-        if (h == g_w.hwnd && g_w.hooked) {
-            if (TryEnterCriticalSection(&g_lock)) {
-                DWORD pid = 0;
-                GetWindowThreadProcessId(GetForegroundWindow(), &pid);
-                if (g_board.open) Activate(pid == GetCurrentProcessId());
-                LeaveCriticalSection(&g_lock);
-            } else if (lp < 500) {
-                PostMessageW(h, again, wp, lp + 1);
-            }
-        }
+    // gl2d9's own: the window covered or made a window (Show), never the game's.
+    if (const UINT show = ShowMsg(); show && msg == show) {
+        if (h == g_w.hwnd && g_w.hooked && !g_w.suspended) ShowNow();  // (the board may not be open yet)
         return 0;
     }
     if (h != g_w.hwnd || !g_w.hooked) {
@@ -259,15 +286,7 @@ LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_board.open && GetCursor()) SetCursor(nullptr);
         break;
     case WM_ACTIVATEAPP:
-        // A game drawing on another thread holds the lock most of the frame: tried again
-        // shortly (a focus change dropped left the window topmost over the desktop, or, the
-        // focus back dropped, the game minimized for good).
-        if (TryEnterCriticalSection(&g_lock)) {
-            Activate(wp != 0);
-            LeaveCriticalSection(&g_lock);
-        } else if (const UINT again = DeferredActivateMsg()) {
-            PostMessageW(h, again, wp != 0, 0);
-        }
+        Activate(wp != 0);
         break;
     case WM_PAINT:
         if (g_board.open && TryEnterCriticalSection(&g_lock)) {
@@ -415,6 +434,20 @@ HWND WindowMakeHelper() {
 
 void WindowDestroyHelper(HWND h) {
     if (h && IsWindow(h)) DestroyWindow(h);
+}
+
+SIZE WindowClientSize() {
+    RECT c = {};
+    if (g_w.hwnd && !g_w.suspended && g_w.display != kDisplayWindow) {
+        const RECT m = MonitorRect(g_w.hwnd);
+        return SIZE{m.right - m.left, m.bottom - m.top};
+    }
+    // A window: Windowed's client size, the game's resolution, though the window may not be
+    // there yet (placed on its own thread, a game drawing on another).
+    if (g_w.display == kDisplayWindow && g_board.screenW > 0 && g_board.screenH > 0)
+        return SIZE{g_board.screenW, g_board.screenH};
+    if (g_w.hwnd && GetClientRect(g_w.hwnd, &c) && c.right > 0 && c.bottom > 0) return SIZE{c.right, c.bottom};
+    return SIZE{g_board.screenW, g_board.screenH};
 }
 
 RECT ImageRect(int cw, int ch) {
@@ -567,8 +600,7 @@ bool WindowOpen(HWND requested) {
         g_w.switched = SwitchMode();
         if (!g_w.switched) g_w.display = kDisplayBorderless;
     }
-    if (g_w.display == kDisplayWindow) Windowed();
-    else Cover();
+    Show();
     if (g_w.own) {
         ShowWindow(h, SW_SHOW);
         SetForegroundWindow(h);
@@ -598,7 +630,7 @@ void WindowClose() {
 // The cursor hidden over the picture each frame too: a game that captures the mouse (Unreal)
 // gets no WM_SETCURSOR, and keeps the cursor its window class has. (The cursor is the
 // calling thread's: games draw from the thread of their window.)
-void HideCursor() {
+static void HideCursor() {
     HWND hwnd = g_w.hwnd;
     if (!hwnd || g_w.suspended || !GetCursor()) return;
     POINT p;
@@ -613,6 +645,11 @@ void HideCursor() {
 
 void WindowPump() {
     HideCursor();
+    // Asks after the thread's input, as games did each frame (and gl2d9's screenshot key, before
+    // 1.1.0): on Wine that is when the window's new size (covering the monitor) reaches the
+    // X server for a game that doesn't pump its messages while drawing (else the picture was
+    // shown at the window's old size, cut off). It dispatches nothing.
+    GetQueueStatus(QS_ALLINPUT);
     if (!g_w.own || !g_w.hwnd) return;
     MSG m;
     while (PeekMessageW(&m, g_w.hwnd, 0, 0, PM_REMOVE)) {

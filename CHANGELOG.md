@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.1.0
+Recorders and overlays capture the game, Alt+Tab is reliable for games drawing on their own
+thread (Unreal), and fixes for stutter and device resets. The screenshot key is gone.
+
+- **Recorders and overlays see the game.** The back buffer was the size of the largest
+  monitor, and only the window's part of it was presented (a source rectangle), sometimes
+  from a hidden helper window. OBS's game capture, Steam's overlay and RTSS hook `Present`
+  and take the whole render target, and swap chain 0's window: in a window, OBS recorded a
+  1920x1080 frame with the 640x480 game in its corner. The back buffer is now the game
+  window's client area, presented whole into it, as any windowed Direct3D 9 game's; resized
+  with the window (a `Reset`, the picture kept). Where Windows refuses the device on the
+  game's window, the helper window's device presents through a swap chain made on the
+  game's, sized the same way.
+- **The screenshot key is gone** (`screenshotkey`: it was for capture tools that showed the
+  picture black). An ini file that sets it still loads.
+- **Alt+Tab with a game that draws on its own thread** (Unreal, or any game with OBS running).
+  1.0.2 retried a focus change that found Glide's lock taken, 500 times, all within about a
+  millisecond, while the drawing thread holds the lock for a whole `Present` (longer with
+  OBS copying the frame there): Alt+Tab did nothing, or the game came back black. The focus
+  change is now done on the window's own thread without the lock; only repainting needs it,
+  and is skipped while the game draws (its next frame shows). New test `tests/glide2/focus`:
+  6 Alt+Tabs, from another thread too; 1.0.2 missed all 6 there.
+- **The window is placed on its own thread.** A game opening Glide on another thread had its
+  window covered from there, asynchronously: the game was sent size and move messages for
+  gl2d9's own moves (an Unreal game could react to them), and the restyling waited for the
+  window's thread with Glide's lock held. Done on the window's thread now, and the device
+  is made at the size the window is about to have (not reset to it straight away).
+- **A refused `Reset` is logged and doesn't spin.** It was retried on every draw, silently,
+  the picture black. Now: its error logged, tried again every quarter second, and after two
+  seconds of refusals (something else holding video memory on the device, such as a capture
+  hook) the device is made anew. A removed or hung device (`Present`, or a 9Ex device's
+  state) is made anew too. A swap that shows nothing waits a refresh, without the lock.
+- **The texture cache's budget no longer stutters.** Over budget, every new texture sorted
+  the whole cache, and dropped nothing when all the rest were in use that frame: a cost that
+  grew with the cache, each frame (Unreal's light maps, new at new addresses). The budget is
+  enforced once a frame at most, and the spare textures count and go first.
+- **A call that runs out of memory fails instead of aborting the game.** A C++ exception
+  from gl2d9 (memory run out, in a 32-bit game's address space: Unreal's) can't pass into
+  the game, which aborted ("requested the Runtime to terminate"). Every Glide call, and
+  gl2d9's window procedure, now catches it: logged (`failed: std::bad_alloc`), what the
+  call left half done dropped (the batch; spare and unused textures freed), and the call
+  returned as failed. A half-done `grSstWinOpen` is closed again, a failed `grLfbLock` or
+  `grLfbUnlock` leaves the buffer unlocked, and a texture whose decoding was cut short is
+  decoded again at its next use. The crash log no longer allocates (a crash with the memory
+  run out was logged by code that could fail itself).
+- **The frame limit's last half millisecond** lets the game's other threads run (with
+  `cpus=1` they share its one processor).
+- **Fixes for arguments a game gets wrong:** a texture whose level address wraps past 4 GB no
+  longer reads before the texture memory; absurd vertex, polygon and RLE region sizes are
+  refused instead of allocating gigabytes; a triangle far off the screen in stipple rotate
+  mode no longer has a row made for every scanline up to it (memory, then a crash).
+- **The shader cache recovers:** a damaged record (cut short, or refused by the device) is
+  dropped and compiled again, and a record cut short no longer hides the ones after it.
+- `cpus=on` is accepted (one processor); `anisotropy=1` is refused (0, or 2 to 16).
+- On Wine, a game that doesn't pump its messages while drawing has its covered window shown
+  at the full size (it showed at the size the window had before).
+
 ## 1.0.2
 Fixes for frame buffer locks, focus changes, vsync and device resets, and some work taken off
 the hot paths. The pictures are the same as 1.0.1's.

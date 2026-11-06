@@ -19,6 +19,9 @@ void WindowPump();
 // from its rendering thread). Destroyed by the same thread.
 HWND WindowMakeHelper();
 void WindowDestroyHelper(HWND h);
+// The client area the window has, or is about to have once covered or made a window (that
+// may be done on its own thread a moment later): the size to present at.
+SIZE WindowClientSize();
 // Where the screen goes in a client area of cw x ch (as config stretch says).
 RECT ImageRect(int cw, int ch);
 // Whether the game's monitor has a display mode of w x h (the resolutions offered to games).

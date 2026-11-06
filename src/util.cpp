@@ -134,18 +134,8 @@ static void Apply(const std::string& key, const std::string& rawVal, const std::
     } else if (key == "tmus") {
         number(1, 2, &g_config.tmus);
     } else if (key == "screenshotkey") {
-        static const struct {
-            const char* name;
-            int vk;
-        } kKeys[] = {{"none", 0},      {"0", 0},          {"printscreen", VK_SNAPSHOT}, {"scrolllock", VK_SCROLL},
-                     {"pause", VK_PAUSE}, {"insert", VK_INSERT}, {"home", VK_HOME},          {"end", VK_END}};
-        bool found = false;
-        for (const auto& k : kKeys)
-            if (v == k.name) g_config.screenshotKey = k.vk, found = true;
-        int f = 0;
-        if (!found && v.size() >= 2 && v[0] == 'f' && sscanf(v.c_str() + 1, "%d", &f) == 1 && f >= 1 && f <= 12)
-            g_config.screenshotKey = VK_F1 + f - 1, found = true;
-        ok = found;
+        // Gone in 1.1.0 (recorders and overlays capture the picture now): accepted and
+        // ignored, so old ini files load without an error.
     } else if (key == "fpslimit" || key == "fps") {
         char* end = nullptr;
         const long x = v == "off" ? 0 : strtol(v.c_str(), &end, 10);
@@ -155,7 +145,8 @@ static void Apply(const std::string& key, const std::string& rawVal, const std::
     } else if (key == "cpus") {
         int b;
         char* end = nullptr;
-        const long x = v == "off" || v == "all" ? 0 : ParseBool(v, &b) && !b ? 0 : strtol(v.c_str(), &end, 10);
+        // (on/true: one processor, the default; off/all/0: all of them)
+        const long x = v == "off" || v == "all" ? 0 : ParseBool(v, &b) ? b : strtol(v.c_str(), &end, 10);
         if (end && (end == v.c_str() || *end)) ok = false;
         else if (x < 0 || x > 64) ok = false;
         else g_config.cpus = int(x);
@@ -168,7 +159,7 @@ static void Apply(const std::string& key, const std::string& rawVal, const std::
         char* end = nullptr;
         const long x = ParseBool(v, &b) && !b ? 0 : strtol(v.c_str(), &end, 10);
         if (end && (end == v.c_str() || *end)) ok = false;
-        else if (x < 0 || x > 16) ok = false;
+        else if (x < 0 || x == 1 || x > 16) ok = false;  // (0 off, 2 to 16)
         else g_config.anisotropy = int(x);
     } else if (key == "overlaybias") {
         int b;
@@ -272,26 +263,6 @@ std::wstring ShaderCachePath() {
     if (dot != std::wstring::npos) name.resize(dot);
     const std::wstring other = dir + L"\\" + name + L".shaders";
     return CanWrite(other) ? other : std::wstring();
-}
-
-std::wstring ScreenshotPath() {
-    const std::wstring exe = ModulePath(nullptr);
-    const std::wstring dir = DirOf(exe) + L"screenshots";
-    CreateDirectoryW(dir.c_str(), nullptr);
-    std::wstring name = BaseName(exe);
-    const size_t dot = name.rfind(L'.');
-    if (dot != std::wstring::npos) name.resize(dot);
-    SYSTEMTIME t;
-    GetLocalTime(&t);
-    wchar_t stamp[64];
-    swprintf(stamp, 64, L"_%04u-%02u-%02u_%02u-%02u-%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
-    for (int n = 0; n < 1000; n++) {
-        std::wstring p = dir + L"\\" + name + stamp;
-        if (n) p += L"_" + std::to_wstring(n);
-        p += L".bmp";
-        if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) return p;
-    }
-    return std::wstring();
 }
 
 void LoadConfig(HMODULE self) {
@@ -412,10 +383,17 @@ static HMODULE ModuleAt(const void* addr) {
     return m;
 }
 
-// "module.dll+0x1234" for a code address, or the bare address outside any module.
+// "module.dll+0x1234" for a code address, or the bare address outside any module. (No
+// allocation: called by CrashLogger, maybe with the memory run out.)
 static void DescribeAddress(const void* addr, char* out, size_t size) {
     if (HMODULE m = ModuleAt(addr)) {
-        snprintf(out, size, "%s+0x%lx", Utf8(BaseName(ModulePath(m))).c_str(),
+        wchar_t path[MAX_PATH] = L"";
+        GetModuleFileNameW(m, path, MAX_PATH);
+        const wchar_t* name = wcsrchr(path, L'\\');
+        name = name ? name + 1 : path;
+        char narrow[MAX_PATH * 3] = "";
+        WideCharToMultiByte(CP_UTF8, 0, name, -1, narrow, sizeof(narrow), nullptr, nullptr);
+        snprintf(out, size, "%s+0x%lx", narrow,
                  static_cast<unsigned long>(static_cast<const char*>(addr) - reinterpret_cast<const char*>(m)));
     } else {
         snprintf(out, size, "%p", addr);
@@ -471,15 +449,17 @@ static LONG CALLBACK CrashLogger(EXCEPTION_POINTERS* ep) {
     MEMORY_BASIC_INFORMATION mbi;
     if (!VirtualQuery(sp, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return EXCEPTION_CONTINUE_SEARCH;
     const auto* top = reinterpret_cast<const ULONG_PTR*>(static_cast<const char*>(mbi.BaseAddress) + mbi.RegionSize);
-    std::string chain;
+    // (A fixed buffer: a crash may come with the memory run out, and nothing here may throw.)
+    char chain[12 * 304] = "";
+    size_t used = 0;
     int found = 0;
     for (int i = 0; i < 512 && sp + i < top && found < 12; i++) {
         if (!ModuleAt(reinterpret_cast<const void*>(sp[i]))) continue;
         DescribeAddress(reinterpret_cast<const void*>(sp[i]), at, sizeof(at));
-        chain += found++ ? ", " : "";
-        chain += at;
+        const int n = snprintf(chain + used, sizeof(chain) - used, "%s%s", found++ ? ", " : "", at);
+        if (n > 0) used = std::min(sizeof(chain) - 1, used + size_t(n));
     }
-    Log(1, "  stack (modules found, innermost first): %s", found ? chain.c_str() : "none");
+    Log(1, "  stack (modules found, innermost first): %s", found ? chain : "none");
 #endif
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -601,7 +581,9 @@ void SleepUntilQpc(int64_t target) {
             finePeriod();
         }
         if (!timer && ms > 2.0) Sleep(DWORD(ms - 1.5));
-        else YieldProcessor();
+        // The last half millisecond: the processor offered to the process's other threads
+        // meanwhile (with cpus=1 they share the game's one: its sound, a renderer's thread).
+        else if (!SwitchToThread()) YieldProcessor();
     }
 }
 }  // namespace
