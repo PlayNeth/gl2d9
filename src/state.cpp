@@ -27,10 +27,8 @@ FxU32 TLodEvenOddBits(FxU32 evenOdd) {
 FxU32 SwizzleColor(GrColor_t c) {  // Glide's _grSwizzleColor: into ARGB
     switch (g_board.colorFormat) {
     case GR_COLORFORMAT_ABGR: return (c & 0xFF00FF00u) | (c & 0xFF) << 16 | ((c >> 16) & 0xFF);
-    case GR_COLORFORMAT_RGBA:
-        return (c & 0xFF) << 24 | (c >> 24) << 16 | ((c >> 16) & 0xFF) << 8 | ((c >> 8) & 0xFF);
-    case GR_COLORFORMAT_BGRA:
-        return (c & 0xFF) << 24 | ((c >> 8) & 0xFF) << 16 | ((c >> 16) & 0xFF) << 8 | (c >> 24);
+    case GR_COLORFORMAT_RGBA: return (c & 0xFF) << 24 | (c >> 24) << 16 | ((c >> 16) & 0xFF) << 8 | ((c >> 8) & 0xFF);
+    case GR_COLORFORMAT_BGRA: return (c & 0xFF) << 24 | ((c >> 8) & 0xFF) << 16 | ((c >> 16) & 0xFF) << 8 | (c >> 24);
     default: return c;
     }
 }
@@ -116,8 +114,7 @@ void AlphaBlendFunction(GrAlphaBlendFnc_t rgbSf, GrAlphaBlendFnc_t rgbDf, GrAlph
     if (aDf != GR_BLEND_ONE && aDf != GR_BLEND_ZERO) aDf = GR_BLEND_ZERO;
     if (rgbSf == GR_BLEND_ONE && rgbDf == GR_BLEND_ZERO && aSf == GR_BLEND_ONE && aDf == GR_BLEND_ZERO)
         a &= ~SST_ENALPHABLEND;
-    else
-        a |= SST_ENALPHABLEND;
+    else a |= SST_ENALPHABLEND;
     a &= ~(SST_RGBSRCFACT | SST_RGBDSTFACT | SST_ASRCFACT | SST_ADSTFACT);
     a |= (FxU32(rgbSf) & 0xF) << SST_RGBSRCFACT_SHIFT | (FxU32(rgbDf) & 0xF) << SST_RGBDSTFACT_SHIFT |
          (FxU32(aSf) & 0xF) << SST_ASRCFACT_SHIFT | (FxU32(aDf) & 0xF) << SST_ADSTFACT_SHIFT;
@@ -163,9 +160,7 @@ void ColorMask(FxBool rgb, FxBool alpha) {
     R().fbzMode = m;
 }
 
-void ConstantColorValue(GrColor_t c) {
-    R().color0 = R().color1 = SwizzleColor(c);
-}
+void ConstantColorValue(GrColor_t c) { R().color0 = R().color1 = SwizzleColor(c); }
 
 // Glide's _grColorCombineDelta0Mode: the iterated color replaced by grConstantColorValue4's.
 void ColorCombineDelta0Mode(FxBool enable) { St().ccDelta0 = enable ? 1 : 0; }
@@ -419,8 +414,10 @@ void TexMultibaseAddress(GrChipID_t tmu, GrTexBaseRange_t range, FxU32 startAddr
     if (range > GR_TEXBASE_32_TO_1) return;
     const FxU32 base = TexCalcBaseAddress(startAddress, kLod[range], info->aspectRatio, info->format, evenOdd) >> 3;
     TmuRegs& t = R().tmu[tmu];
-    (range == GR_TEXBASE_256 ? t.texBaseAddr : range == GR_TEXBASE_128 ? t.texBaseAddr1
-                                             : range == GR_TEXBASE_64 ? t.texBaseAddr2 : t.texBaseAddr38) = base;
+    (range == GR_TEXBASE_256   ? t.texBaseAddr
+     : range == GR_TEXBASE_128 ? t.texBaseAddr1
+     : range == GR_TEXBASE_64  ? t.texBaseAddr2
+                               : t.texBaseAddr38) = base;
 }
 
 // ---------------------------------------------------------------- the state grSstWinOpen sets up

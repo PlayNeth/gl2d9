@@ -277,12 +277,10 @@ bool DescribeTexture(GrChipID_t tmu, const TmuRegs& r, TexDesc* d) {
     d->tsplit = (tl & SST_LOD_TSPLIT) != 0;
     d->odd = (tl & SST_LOD_ODD) != 0;
     d->nccTable = (r.textureMode & SST_TNCCSELECT) ? 1 : 0;
-    if (d->format == GR_TEXFMT_P_8 || d->format == GR_TEXFMT_AP_88)
-        d->tableHash = g_board.paletteHash[tmu];
+    if (d->format == GR_TEXFMT_P_8 || d->format == GR_TEXFMT_AP_88) d->tableHash = g_board.paletteHash[tmu];
     else if (d->format == GR_TEXFMT_YIQ_422 || d->format == GR_TEXFMT_AYIQ_8422)
         d->tableHash = g_board.nccHash[tmu][d->nccTable] ^ FxU32(d->nccTable);
-    else
-        d->tableHash = 0;
+    else d->tableHash = 0;
     int w, h;
     LevelSize(d->lodMin, d->aspect, &w, &h);
     d->width = w;
@@ -350,7 +348,8 @@ void DecodeLevel(const TexDesc& d, int lod, FxU32* out, int outPitch) {
     const Ncc* ncc = nccTable ? &*nccTable : nullptr;
     // The 16-bit RGB formats converted directly (SSE2); the rest through a table of their 256
     // colors (the low byte's, alpha the high byte, for the 16-bit ones).
-    const bool direct = d.format == GR_TEXFMT_RGB_565 || d.format == GR_TEXFMT_ARGB_1555 || d.format == GR_TEXFMT_ARGB_4444;
+    const bool direct =
+        d.format == GR_TEXFMT_RGB_565 || d.format == GR_TEXFMT_ARGB_1555 || d.format == GR_TEXFMT_ARGB_4444;
     FxU32 lut[256];
     if (!direct) TexelTable(d.format, pal, ncc, lut);
     const size_t size = m.bytes.size();

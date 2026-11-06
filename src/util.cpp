@@ -86,8 +86,14 @@ static std::string Trim(const std::string& s) {
 }
 
 static bool ParseBool(const std::string& v, int* out) {
-    if (v == "1" || v == "true" || v == "yes" || v == "on") { *out = 1; return true; }
-    if (v == "0" || v == "false" || v == "no" || v == "off") { *out = 0; return true; }
+    if (v == "1" || v == "true" || v == "yes" || v == "on") {
+        *out = 1;
+        return true;
+    }
+    if (v == "0" || v == "false" || v == "no" || v == "off") {
+        *out = 0;
+        return true;
+    }
     return false;
 }
 
@@ -353,7 +359,8 @@ void LogInit() {
     for (const auto& f : g_iniLoaded) Log(1, "config:  %s", Utf8(f).c_str());
     for (const auto& e : g_iniErrors) Log(1, "config:  %s", Utf8(e).c_str());
     Log(1,
-        "settings: display=%s stretch=%s filter=%s vsync=%s scale=%d d3d9=%s tmus=%d tmumemory=%d (0 = auto) fbmemory=%d "
+        "settings: display=%s stretch=%s filter=%s vsync=%s scale=%d d3d9=%s tmus=%d tmumemory=%d (0 = auto) "
+        "fbmemory=%d "
         "shadercache=%d overlaybias=%d voodoolook=%d fpslimit=%d cpus=%d texfilter=%s anisotropy=%d log=%d",
         kDisplay[g_config.display], kStretch[g_config.stretch], kFilter[g_config.filter], kVSync[g_config.vsync],
         g_config.scale, g_config.systemD3D9 ? "system" : "game", g_config.tmus, g_config.tmuMB, g_config.fbMB,
@@ -371,7 +378,8 @@ static HMODULE ModuleAt(const void* addr) {
     if (reinterpret_cast<ULONG_PTR>(addr) < 0x10000) return nullptr;  // null and small values: no module
     HMODULE m = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            static_cast<LPCWSTR>(addr), &m) || !m)
+                            static_cast<LPCWSTR>(addr), &m) ||
+        !m)
         return nullptr;
     const auto* base = reinterpret_cast<const uint8_t*>(m);
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
@@ -438,7 +446,10 @@ static LONG CALLBACK CrashLogger(EXCEPTION_POINTERS* ep) {
     char detail[64] = "";
     if (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2) {
         const ULONG_PTR kind = ep->ExceptionRecord->ExceptionInformation[0];
-        snprintf(detail, sizeof(detail), " %s 0x%08lx", kind == 0 ? "reading" : kind == 8 ? "executing" : "writing",
+        snprintf(detail, sizeof(detail), " %s 0x%08lx",
+                 kind == 0   ? "reading"
+                 : kind == 8 ? "executing"
+                             : "writing",
                  static_cast<unsigned long>(ep->ExceptionRecord->ExceptionInformation[1]));
     }
     Log(1, "exception 0x%08lx (%s%s) at %s - if the game crashed now, this is where", code, what, detail, at);
@@ -560,7 +571,9 @@ void SleepUntilQpc(int64_t target) {
     auto finePeriod = [] {
         if (InterlockedExchange(&periodSet, 1)) return;
         if (HMODULE mm = LoadLibraryW(L"winmm.dll"))
-            if (auto begin = reinterpret_cast<UINT(WINAPI*)(UINT)>(reinterpret_cast<void*>(GetProcAddress(mm, "timeBeginPeriod")))) begin(1);
+            if (auto begin = reinterpret_cast<UINT(WINAPI*)(UINT)>(
+                    reinterpret_cast<void*>(GetProcAddress(mm, "timeBeginPeriod"))))
+                begin(1);
     };
     if (!timer) finePeriod();
     for (;;) {

@@ -24,6 +24,8 @@
 // Glide 2.x for Voodoo 2, and of Glide 3.x for Voodoo 3): the values, written out here.
 // Where Glide 3 changed one, the Glide 3 value carries a G3 in its name.
 #pragma once
+
+// clang-format off: glide.h's tables, laid out as there
 #include <cstdint>
 
 typedef uint8_t FxU8;
@@ -381,3 +383,4 @@ struct GrMipMapInfo {
 };
 #define GR_NULL_MIPMAP_HANDLE ((GrMipMapId_t)-1)
 #define GLIDE_STATE_PAD_SIZE 312  // Glide 2's GrState (grGlideGetState's buffer), bytes
+// clang-format on

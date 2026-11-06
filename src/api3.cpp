@@ -734,8 +734,7 @@ GLAPI void grTexDownloadMipMap(GrChipID_t tmu, FxU32 start, FxU32 evenOdd, const
     if (!info) return;
     const GrTexInfo i2 = Info2(info);
     CoreTexDownloadMipMap(tmu, start, evenOdd, &i2);
-}
-catch (...) { CallFailed(__func__); }
+} catch (...) { CallFailed(__func__); }
 GLAPI FxBool grTexDownloadMipMapLevel(GrChipID_t tmu, FxU32 start, GrLOD_t thisLod, GrLOD_t largeLod,
                                       GrAspectRatio_t aspect, GrTextureFormat_t fmt, FxU32 evenOdd,
                                       const void* data) try {
@@ -744,8 +743,7 @@ GLAPI FxBool grTexDownloadMipMapLevel(GrChipID_t tmu, FxU32 start, GrLOD_t thisL
     LevelSize(Lod2(thisLod), Aspect2(aspect), &w, &h);
     CoreTexDownloadLevel(tmu, start, Lod2(thisLod), Lod2(largeLod), Aspect2(aspect), fmt, evenOdd, data, 0, h - 1);
     return FXTRUE;
-}
-catch (...) { return CallFailed(__func__, FXFALSE); }
+} catch (...) { return CallFailed(__func__, FXFALSE); }
 GLAPI FxBool grTexDownloadMipMapLevelPartial(GrChipID_t tmu, FxU32 start, GrLOD_t thisLod, GrLOD_t largeLod,
                                              GrAspectRatio_t aspect, GrTextureFormat_t fmt, FxU32 evenOdd,
                                              const void* data, int t, int maxT) try {
@@ -818,10 +816,18 @@ GLAPI FxBool gu3dfLoad(const char* name, Gu3dfInfo* info) try {
     info->table = i2.table;
     return FXTRUE;
 } catch (...) { return CallFailed(__func__, FXFALSE); }
-GLAPI float guFogTableIndexToW(int i) try { return GuFogTableIndexToW(i); } catch (...) { return CallFailed(__func__, 0.0f); }
-GLAPI void guFogGenerateExp(GrFog_t* t, float d) try { GuFogGenerateExp(t, d); } catch (...) { CallFailed(__func__); }
-GLAPI void guFogGenerateExp2(GrFog_t* t, float d) try { GuFogGenerateExp2(t, d); } catch (...) { CallFailed(__func__); }
-GLAPI void guFogGenerateLinear(GrFog_t* t, float n, float f) try { GuFogGenerateLinear(t, n, f); } catch (...) { CallFailed(__func__); }
+GLAPI float guFogTableIndexToW(int i) try { return GuFogTableIndexToW(i); } catch (...) {
+    return CallFailed(__func__, 0.0f);
+}
+GLAPI void guFogGenerateExp(GrFog_t* t, float d) try { GuFogGenerateExp(t, d); } catch (...) {
+    CallFailed(__func__);
+}
+GLAPI void guFogGenerateExp2(GrFog_t* t, float d) try { GuFogGenerateExp2(t, d); } catch (...) {
+    CallFailed(__func__);
+}
+GLAPI void guFogGenerateLinear(GrFog_t* t, float n, float f) try { GuFogGenerateLinear(t, n, f); } catch (...) {
+    CallFailed(__func__);
+}
 
 // ---------------------------------------------------------------- 3dfx's debug library (exported by Glide 3)
 

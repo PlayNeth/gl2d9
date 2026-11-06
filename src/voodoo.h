@@ -171,7 +171,7 @@ struct TmuRegs {
     FxU32 textureMode;
     FxU32 tLOD;
     FxU32 tDetail;
-    FxU32 texBaseAddr;  // in 8-byte units: where a 256 level would start (grTexSource)
+    FxU32 texBaseAddr;                                // in 8-byte units: where a 256 level would start (grTexSource)
     FxU32 texBaseAddr1, texBaseAddr2, texBaseAddr38;  // grTexMultibase
 };
 
@@ -219,18 +219,18 @@ static_assert(sizeof(GlideState) <= GLIDE_STATE_PAD_SIZE, "GrState is 312 bytes 
 
 // Glide's per-board context (gc): the state plus what isn't saved with it.
 struct Board {
-    bool open = false;          // grSstWinOpen done
+    bool open = false;  // grSstWinOpen done
     GlideState s{};
     int numTmu = 2;
-    FxU32 tmuMem = 4u << 20;    // bytes of texture memory a TMU has
+    FxU32 tmuMem = 4u << 20;  // bytes of texture memory a TMU has
     int screenW = 640, screenH = 480;
     GrScreenResolution_t res = GR_RESOLUTION_NONE;
     GrScreenRefresh_t refresh = GR_REFRESH_NONE;
     GrColorFormat_t colorFormat = GR_COLORFORMAT_ARGB;
     int numColorBuffers = 2, numAuxBuffers = 1;
-    HWND hwnd = nullptr;        // the window the screen is shown in
+    HWND hwnd = nullptr;         // the window the screen is shown in
     unsigned stippleWrites = 0;  // writes to the stipple register (rotate mode starts over at each)
-    bool ownWindow = false;     // ... made by gl2d9 (none given, none active)
+    bool ownWindow = false;      // ... made by gl2d9 (none given, none active)
     GrErrorCallbackFnc_t errorCallback = nullptr;
     // NCC tables and palette as downloaded to each TMU (grTexDownloadTable).
     GuNccTable ncc[kMaxTmu][2]{};

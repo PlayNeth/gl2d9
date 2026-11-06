@@ -375,8 +375,7 @@ GLAPI void grTexDownloadMipMap(GrChipID_t tmu, FxU32 start, FxU32 evenOdd, const
                  static_cast<unsigned long>(evenOdd), long(info->largeLod), long(info->smallLod),
                  long(info->aspectRatio), long(info->format));
     CoreTexDownloadMipMap(tmu, start, evenOdd, info);
-}
-catch (...) { CallFailed(__func__); }
+} catch (...) { CallFailed(__func__); }
 GLAPI void grTexDownloadMipMapLevel(GrChipID_t tmu, FxU32 start, GrLOD_t thisLod, GrLOD_t largeLod,
                                     GrAspectRatio_t aspect, GrTextureFormat_t fmt, FxU32 evenOdd,
                                     const void* data) try {
@@ -386,8 +385,7 @@ GLAPI void grTexDownloadMipMapLevel(GrChipID_t tmu, FxU32 start, GrLOD_t thisLod
     int w, h;
     LevelSize(thisLod, aspect, &w, &h);
     CoreTexDownloadLevel(tmu, start, thisLod, largeLod, aspect, fmt, evenOdd, data, 0, h - 1);
-}
-catch (...) { CallFailed(__func__); }
+} catch (...) { CallFailed(__func__); }
 GLAPI void grTexDownloadMipMapLevelPartial(GrChipID_t tmu, FxU32 start, GrLOD_t thisLod, GrLOD_t largeLod,
                                            GrAspectRatio_t aspect, GrTextureFormat_t fmt, FxU32 evenOdd,
                                            const void* data, int t, int maxT) try {
@@ -560,11 +558,21 @@ GLAPI void grSstIdle() try {
 } catch (...) { CallFailed(__func__); }
 GLAPI FxBool grSstIsBusy() { return FXFALSE; }
 // FIFOs free, idle; vretrace
-GLAPI FxU32 grSstStatus() try { return 0x0FFFF03Fu | (FramePhase() >= 0.95 ? 0x40u : 0u); } catch (...) { return CallFailed(__func__, 0); }
-GLAPI FxBool grSstVRetraceOn() try { return FramePhase() >= 0.95 ? FXTRUE : FXFALSE; } catch (...) { return CallFailed(__func__, FXFALSE); }
-GLAPI FxU32 grSstVideoLine() try { return FxU32(FramePhase() * (g_board.screenH + 45)); } catch (...) { return CallFailed(__func__, 0); }
-GLAPI FxU32 grSstScreenWidth() try { return FxU32(g_board.screenW); } catch (...) { return CallFailed(__func__, 0); }
-GLAPI FxU32 grSstScreenHeight() try { return FxU32(g_board.screenH); } catch (...) { return CallFailed(__func__, 0); }
+GLAPI FxU32 grSstStatus() try { return 0x0FFFF03Fu | (FramePhase() >= 0.95 ? 0x40u : 0u); } catch (...) {
+    return CallFailed(__func__, 0);
+}
+GLAPI FxBool grSstVRetraceOn() try { return FramePhase() >= 0.95 ? FXTRUE : FXFALSE; } catch (...) {
+    return CallFailed(__func__, FXFALSE);
+}
+GLAPI FxU32 grSstVideoLine() try { return FxU32(FramePhase() * (g_board.screenH + 45)); } catch (...) {
+    return CallFailed(__func__, 0);
+}
+GLAPI FxU32 grSstScreenWidth() try { return FxU32(g_board.screenW); } catch (...) {
+    return CallFailed(__func__, 0);
+}
+GLAPI FxU32 grSstScreenHeight() try { return FxU32(g_board.screenH); } catch (...) {
+    return CallFailed(__func__, 0);
+}
 GLAPI void grSstPerfStats(GrSstPerfStats_t* s) try {
     if (s) memset(s, 0, sizeof(*s));
 } catch (...) { CallFailed(__func__); }
@@ -578,10 +586,12 @@ GLAPI void grCheckForRoom(FxI32) {}
 
 // ---------------------------------------------------------------- gu
 
-GLAPI FxBool gu3dfGetInfo(const char* name, Gu3dfInfo* info) try {
-    return Gu3dfGetInfo(name, info);
-} catch (...) { return CallFailed(__func__, FXFALSE); }
-GLAPI FxBool gu3dfLoad(const char* name, Gu3dfInfo* info) try { return Gu3dfLoad(name, info); } catch (...) { return CallFailed(__func__, FXFALSE); }
+GLAPI FxBool gu3dfGetInfo(const char* name, Gu3dfInfo* info) try { return Gu3dfGetInfo(name, info); } catch (...) {
+    return CallFailed(__func__, FXFALSE);
+}
+GLAPI FxBool gu3dfLoad(const char* name, Gu3dfInfo* info) try { return Gu3dfLoad(name, info); } catch (...) {
+    return CallFailed(__func__, FXFALSE);
+}
 GLAPI void guAlphaSource(GrAlphaSource_t m) try {
     ENTRY("guAlphaSource");
     GuAlphaSource(m);
@@ -607,12 +617,24 @@ GLAPI int guEncodeRLE16(void* dst, void* src, FxU32 width, FxU32 height) try {
     }
     return bytes;
 } catch (...) { return CallFailed(__func__, 0); }
-GLAPI FxU16 guEndianSwapBytes(FxU16 v) try { return FxU16((v >> 8) | (v << 8)); } catch (...) { return CallFailed(__func__, 0); }
-GLAPI FxU32 guEndianSwapWords(FxU32 v) try { return (v >> 16) | (v << 16); } catch (...) { return CallFailed(__func__, 0); }
-GLAPI float guFogTableIndexToW(int i) try { return GuFogTableIndexToW(i); } catch (...) { return CallFailed(__func__, 0.0f); }
-GLAPI void guFogGenerateExp(GrFog_t* t, float d) try { GuFogGenerateExp(t, d); } catch (...) { CallFailed(__func__); }
-GLAPI void guFogGenerateExp2(GrFog_t* t, float d) try { GuFogGenerateExp2(t, d); } catch (...) { CallFailed(__func__); }
-GLAPI void guFogGenerateLinear(GrFog_t* t, float n, float f) try { GuFogGenerateLinear(t, n, f); } catch (...) { CallFailed(__func__); }
+GLAPI FxU16 guEndianSwapBytes(FxU16 v) try { return FxU16((v >> 8) | (v << 8)); } catch (...) {
+    return CallFailed(__func__, 0);
+}
+GLAPI FxU32 guEndianSwapWords(FxU32 v) try { return (v >> 16) | (v << 16); } catch (...) {
+    return CallFailed(__func__, 0);
+}
+GLAPI float guFogTableIndexToW(int i) try { return GuFogTableIndexToW(i); } catch (...) {
+    return CallFailed(__func__, 0.0f);
+}
+GLAPI void guFogGenerateExp(GrFog_t* t, float d) try { GuFogGenerateExp(t, d); } catch (...) {
+    CallFailed(__func__);
+}
+GLAPI void guFogGenerateExp2(GrFog_t* t, float d) try { GuFogGenerateExp2(t, d); } catch (...) {
+    CallFailed(__func__);
+}
+GLAPI void guFogGenerateLinear(GrFog_t* t, float n, float f) try { GuFogGenerateLinear(t, n, f); } catch (...) {
+    CallFailed(__func__);
+}
 // Multipass texturing: two textures with one TMU, as 3dfx's gump.c does it.
 GLAPI void guMPInit() try {
     ENTRY("guMPInit");
@@ -646,9 +668,10 @@ GLAPI FxBool guTexChangeAttributes(GrMipMapId_t id, int w, int h, GrTextureForma
                                    GrTextureFilterMode_t magf) try {
     ENTRY("guTexChangeAttributes");
     return GuTexChangeAttributes(id, w, h, fmt, mm, small, large, aspect, sc, tc, minf, magf);
+} catch (...) { return CallFailed(__func__, FXFALSE); }
+GLAPI FxU16* guTexCreateColorMipMap() try { return GuTexCreateColorMipMap(); } catch (...) {
+    return CallFailed(__func__, nullptr);
 }
-catch (...) { return CallFailed(__func__, FXFALSE); }
-GLAPI FxU16* guTexCreateColorMipMap() try { return GuTexCreateColorMipMap(); } catch (...) { return CallFailed(__func__, nullptr); }
 GLAPI void guTexDownloadMipMap(GrMipMapId_t id, const void* src, const GuNccTable* ncc) try {
     ENTRY("guTexDownloadMipMap");
     GuTexDownloadMipMap(id, src, ncc);
@@ -657,11 +680,15 @@ GLAPI void guTexDownloadMipMapLevel(GrMipMapId_t id, GrLOD_t lod, const void** s
     ENTRY("guTexDownloadMipMapLevel");
     GuTexDownloadMipMapLevel(id, lod, src);
 } catch (...) { CallFailed(__func__); }
-GLAPI GrMipMapId_t guTexGetCurrentMipMap(GrChipID_t tmu) try {
-    return GuTexGetCurrentMipMap(tmu);
-} catch (...) { return CallFailed(__func__, GR_NULL_MIPMAP_HANDLE); }
-GLAPI GrMipMapInfo* guTexGetMipMapInfo(GrMipMapId_t id) try { return GuTexGetMipMapInfo(id); } catch (...) { return CallFailed(__func__, nullptr); }
-GLAPI FxU32 guTexMemQueryAvail(GrChipID_t tmu) try { return GuTexMemQueryAvail(tmu); } catch (...) { return CallFailed(__func__, 0); }
+GLAPI GrMipMapId_t guTexGetCurrentMipMap(GrChipID_t tmu) try { return GuTexGetCurrentMipMap(tmu); } catch (...) {
+    return CallFailed(__func__, GR_NULL_MIPMAP_HANDLE);
+}
+GLAPI GrMipMapInfo* guTexGetMipMapInfo(GrMipMapId_t id) try { return GuTexGetMipMapInfo(id); } catch (...) {
+    return CallFailed(__func__, nullptr);
+}
+GLAPI FxU32 guTexMemQueryAvail(GrChipID_t tmu) try { return GuTexMemQueryAvail(tmu); } catch (...) {
+    return CallFailed(__func__, 0);
+}
 GLAPI void guTexMemReset() try {
     ENTRY("guTexMemReset");
     GuTexMemReset();
@@ -686,7 +713,9 @@ GLAPI FxBool pciFindMTRRMatch(FxU32, FxU32, FxU32, FxU32*) { return FXFALSE; }
 GLAPI FxBool pciGetConfigData(FxU32, FxU32, FxU32, FxU32, FxU32*) { return FXFALSE; }
 GLAPI FxBool pciSetConfigData(FxU32, FxU32, FxU32, FxU32, FxU32*) { return FXFALSE; }
 GLAPI FxU32 pciGetErrorCode() { return 0; }
-GLAPI const char* pciGetErrorString() try { return "no PCI access (gl2d9)"; } catch (...) { return CallFailed(__func__, nullptr); }
+GLAPI const char* pciGetErrorString() try { return "no PCI access (gl2d9)"; } catch (...) {
+    return CallFailed(__func__, nullptr);
+}
 GLAPI FxBool pciLinearRangeSetPermission(FxU32, FxU32, FxBool) { return FXFALSE; }
 GLAPI FxU32* pciMapCard(FxU32, FxU32, FxU32, FxU32, FxU32*) { return nullptr; }
 GLAPI FxU32* pciMapCardMulti(FxU32, FxU32, FxU32, FxU32, FxU32, FxU32*) { return nullptr; }

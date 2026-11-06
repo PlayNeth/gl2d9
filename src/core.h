@@ -20,7 +20,7 @@ void CoreWinClose();
 void CoreTriangle(const RVtx& a, const RVtx& b, const RVtx& c);
 void CorePoint(const RVtx& p);
 void CoreLine(const RVtx& a, const RVtx& b);
-void CoreFan(const RVtx* v, int n);  // a convex polygon (a fan from v[0])
+void CoreFan(const RVtx* v, int n);           // a convex polygon (a fan from v[0])
 void CoreTriangleList(const RVtx* v, int n);  // independent triangles
 void CoreStrip(const RVtx* v, int n, bool odd);
 // Antialiased (Glide's grAADraw*): with alpha-blended fringes on the edges.
@@ -35,9 +35,8 @@ void CoreSwap(int interval);
 // Texture memory.
 FxU32 CoreTexMaxAddress(GrChipID_t tmu);
 void CoreTexDownloadMipMap(GrChipID_t tmu, FxU32 startAddress, FxU32 evenOdd, const GrTexInfo* info);
-void CoreTexDownloadLevel(GrChipID_t tmu, FxU32 startAddress, GrLOD_t thisLod, GrLOD_t largeLod,
-                          GrAspectRatio_t aspect, GrTextureFormat_t format, FxU32 evenOdd, const void* data, int t,
-                          int maxT);
+void CoreTexDownloadLevel(GrChipID_t tmu, FxU32 startAddress, GrLOD_t thisLod, GrLOD_t largeLod, GrAspectRatio_t aspect,
+                          GrTextureFormat_t format, FxU32 evenOdd, const void* data, int t, int maxT);
 // grTexDownloadTable(Partial): an NCC table (0, 1) or the palette (2), Glide 2 semantics.
 void CoreTexDownloadTable(GrChipID_t tmu, GrTexTable_t type, const void* data, int start, int end);
 

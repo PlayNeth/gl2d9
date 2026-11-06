@@ -113,6 +113,7 @@ bool ParseHeader(FILE* f, Gu3dfInfo* info) {
     info->header.large_lod = ll;
     for (char* p = format; *p; p++)
         if (*p >= 'a' && *p <= 'z') *p = char(*p - 'a' + 'A');
+    // clang-format off: two to a line
     static const struct {
         const char* name;
         GrTextureFormat_t fmt;
@@ -123,6 +124,7 @@ bool ParseHeader(FILE* f, Gu3dfInfo* info) {
                     {"AYIQ8422", GR_TEXFMT_AYIQ_8422},      {"ARGB4444", GR_TEXFMT_ARGB_4444},
                     {"AI88", GR_TEXFMT_ALPHA_INTENSITY_88}, {"P8", GR_TEXFMT_P_8},
                     {"AP88", GR_TEXFMT_AP_88}};
+    // clang-format on
     for (const auto& e : kFormats) {
         if (strcmp(format, e.name) == 0) {
             info->header.format = e.fmt;
@@ -301,9 +303,7 @@ void GuColorCombineFunction(GrColorCombineFnc_t fnc) {
     case GR_COLORCOMBINE_CCRGB:
         ColorCombine(GR_COMBINE_FUNCTION_LOCAL, F, GR_COMBINE_LOCAL_CONSTANT, ON, FXFALSE);
         break;
-    case GR_COLORCOMBINE_ITRGB_DELTA0:
-        ColorCombineDelta0Mode(FXTRUE);
-        [[fallthrough]];
+    case GR_COLORCOMBINE_ITRGB_DELTA0: ColorCombineDelta0Mode(FXTRUE); [[fallthrough]];
     case GR_COLORCOMBINE_ITRGB:
         ColorCombine(GR_COMBINE_FUNCTION_LOCAL, F, GR_COMBINE_LOCAL_ITERATED, ON, FXFALSE);
         break;
@@ -314,9 +314,7 @@ void GuColorCombineFunction(GrColorCombineFnc_t fnc) {
         ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER, GR_COMBINE_FACTOR_LOCAL, GR_COMBINE_LOCAL_CONSTANT,
                      GR_COMBINE_OTHER_TEXTURE, FXFALSE);
         break;
-    case GR_COLORCOMBINE_TEXTURE_TIMES_ITRGB_DELTA0:
-        ColorCombineDelta0Mode(FXTRUE);
-        [[fallthrough]];
+    case GR_COLORCOMBINE_TEXTURE_TIMES_ITRGB_DELTA0: ColorCombineDelta0Mode(FXTRUE); [[fallthrough]];
     case GR_COLORCOMBINE_TEXTURE_TIMES_ITRGB:
         ColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER, GR_COMBINE_FACTOR_LOCAL, GR_COMBINE_LOCAL_ITERATED,
                      GR_COMBINE_OTHER_TEXTURE, FXFALSE);

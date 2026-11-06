@@ -265,8 +265,7 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
             for (int y = 0; y < H; y++)
                 memcpy(m + size_t(y) * StridePixels(),
                        g_l.aux.data() + size_t(origin == GR_ORIGIN_LOWER_LEFT ? H - 1 - y : y) * W, size_t(W) * 2);
-        }
-        else
+        } else
             for (int y = 0; y < H; y++) memset(m + size_t(y) * StridePixels(), 0, size_t(W) * 2);
         if (g_l.writeBuffer >= 0 && PixelBytes(g_l.writeMode) == 2) {
             // Both locked, sharing the memory: the read fill becomes what the write lock
@@ -283,13 +282,20 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
         return FXTRUE;
     }
     if (type != GR_LFB_WRITE_ONLY || g_l.writeBuffer >= 0) return FXFALSE;
-    if (PixelBytes(writeMode == GR_LFBWRITEMODE_ANY ? GR_LFBWRITEMODE_565 : writeMode) == 4 && !Memory(4)) return FXFALSE;
+    if (PixelBytes(writeMode == GR_LFBWRITEMODE_ANY ? GR_LFBWRITEMODE_565 : writeMode) == 4 && !Memory(4))
+        return FXFALSE;
     if (writeMode == GR_LFBWRITEMODE_ANY)
         writeMode = buffer == GR_BUFFER_AUXBUFFER ? GR_LFBWRITEMODE_ZA16 : GR_LFBWRITEMODE_565;
     switch (writeMode) {
-    case GR_LFBWRITEMODE_565: case GR_LFBWRITEMODE_555: case GR_LFBWRITEMODE_1555: case GR_LFBWRITEMODE_888:
-    case GR_LFBWRITEMODE_8888: case GR_LFBWRITEMODE_565_DEPTH: case GR_LFBWRITEMODE_555_DEPTH:
-    case GR_LFBWRITEMODE_1555_DEPTH: case GR_LFBWRITEMODE_ZA16: break;
+    case GR_LFBWRITEMODE_565:
+    case GR_LFBWRITEMODE_555:
+    case GR_LFBWRITEMODE_1555:
+    case GR_LFBWRITEMODE_888:
+    case GR_LFBWRITEMODE_8888:
+    case GR_LFBWRITEMODE_565_DEPTH:
+    case GR_LFBWRITEMODE_555_DEPTH:
+    case GR_LFBWRITEMODE_1555_DEPTH:
+    case GR_LFBWRITEMODE_ZA16: break;
     default: return FXFALSE;
     }
     if (IsColorBuffer(buffer) ? writeMode == GR_LFBWRITEMODE_ZA16
@@ -407,8 +413,13 @@ FxBool LfbWriteRegion(GrBuffer_t dst, FxU32 x, FxU32 y, GrLfbSrcFmt_t format, Fx
     // came out black).
     if (color) {
         switch (format) {
-        case GR_LFBWRITEMODE_565: case GR_LFBWRITEMODE_555: case GR_LFBWRITEMODE_1555: case GR_LFBWRITEMODE_888:
-        case GR_LFBWRITEMODE_8888: case GR_LFBWRITEMODE_565_DEPTH: case GR_LFBWRITEMODE_555_DEPTH:
+        case GR_LFBWRITEMODE_565:
+        case GR_LFBWRITEMODE_555:
+        case GR_LFBWRITEMODE_1555:
+        case GR_LFBWRITEMODE_888:
+        case GR_LFBWRITEMODE_8888:
+        case GR_LFBWRITEMODE_565_DEPTH:
+        case GR_LFBWRITEMODE_555_DEPTH:
         case GR_LFBWRITEMODE_1555_DEPTH: break;
         default: return FXFALSE;
         }

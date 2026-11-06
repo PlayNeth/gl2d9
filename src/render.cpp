@@ -76,9 +76,9 @@ struct SpareTex {
 struct Renderer {
     IDirect3D9* d3d = nullptr;
     IDirect3DDevice9* dev = nullptr;
-    HWND hwnd = nullptr;        // the game's window: what is presented into
-    HWND deviceWindow = nullptr;  // what the device is made on: the game's window, or helper
-    HWND helper = nullptr;        // a window of gl2d9's (WindowMakeHelper), where one was needed
+    HWND hwnd = nullptr;           // the game's window: what is presented into
+    HWND deviceWindow = nullptr;   // what the device is made on: the game's window, or helper
+    HWND helper = nullptr;         // a window of gl2d9's (WindowMakeHelper), where one was needed
     bool defaultInterval = false;  // (a fallback: D3DPRESENT_INTERVAL_DEFAULT)
     bool ex = false;               // a Direct3D 9Ex device (where Windows refused a 9 one)
     DWORD anisoLimit = 0;          // anisotropy= within what the GPU can (0: not known yet; 1: none)
@@ -91,12 +91,12 @@ struct Renderer {
     IDirect3DSwapChain9* chain = nullptr;
     UINT chainW = 0, chainH = 0;
     bool chainRefused = false;  // (then the device's own back buffer, into the game's window as 1.0.2 did)
-    DWORD devThread = 0;     // the thread that made the device (Reset there only)
-    DWORD resetFailedAt = 0;  // the last Reset refused (tried again a quarter second on)
+    DWORD devThread = 0;        // the thread that made the device (Reset there only)
+    DWORD resetFailedAt = 0;    // the last Reset refused (tried again a quarter second on)
     unsigned resetFailures = 0;
-    bool remake = false;      // the device to be made anew (removed, hung, or Reset refused too long)
+    bool remake = false;  // the device to be made anew (removed, hung, or Reset refused too long)
     int scale = 1;
-    int w = 0, h = 0;       // the targets' size (the game's resolution times the scale)
+    int w = 0, h = 0;                  // the targets' size (the game's resolution times the scale)
     IDirect3DTexture9* color[2] = {};  // front, back
     IDirect3DSurface9* depth = nullptr;
     IDirect3DTexture9* depthTex = nullptr;  // the depth buffer as an INTZ texture (readable), where there is one
@@ -122,7 +122,7 @@ struct Renderer {
     IDirect3DTexture9* dstCopy = nullptr;  // the target as blending in the shader reads it
     float gamma = 1.0f;
     std::unordered_map<TexKey, TexEntry, TexKeyHash> textures;
-    size_t textureBytes = 0;  // of all of them, the spares' included
+    size_t textureBytes = 0;   // of all of them, the spares' included
     unsigned trimFrame = ~0u;  // the frame the budget was last enforced in (once a frame)
     std::vector<SpareTex> spares;
     unsigned frame = 0;
@@ -138,7 +138,7 @@ struct Renderer {
     IDirect3DTexture9* upload = nullptr;     // LFB writes: the color
     IDirect3DTexture9* uploadAux = nullptr;  // and the depth (r: Direct3D's, g: Glide's / 65535, b: w), a: written
     int uploadW = 0, uploadH = 0;
-    IDirect3DTexture9* auxRead = nullptr;     // the depth buffer read into floats
+    IDirect3DTexture9* auxRead = nullptr;  // the depth buffer read into floats
     IDirect3DSurface9* auxReadback = nullptr;
     std::unordered_map<uint64_t, IDirect3DPixelShader9*> lfbShaders;
     // Reads at the game's resolution (the frame shrunk on the GPU first when scaled), and the
@@ -289,10 +289,8 @@ void DiagnoseCreateDevice() {
             g_r.d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, g_r.deviceWindow, w.flags, &pp, &dev);
         GL_LOG("diagnosis: %s: 0x%08lx", w.what, static_cast<unsigned long>(hr));
         if (SUCCEEDED(hr) && dev) {
-            if (w.usable && !g_r.dev)
-                g_r.dev = dev;
-            else
-                dev->Release();
+            if (w.usable && !g_r.dev) g_r.dev = dev;
+            else dev->Release();
         }
     }
     // The presentation parameters varied (with the usual flags).
@@ -304,10 +302,8 @@ void DiagnoseCreateDevice() {
             g_r.d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, g_r.deviceWindow, flags, &pp, &dev);
         GL_LOG("diagnosis: %s: 0x%08lx", what, static_cast<unsigned long>(hr));
         if (SUCCEEDED(hr) && dev) {
-            if (usable && !g_r.dev)
-                g_r.dev = dev;
-            else
-                dev->Release();
+            if (usable && !g_r.dev) g_r.dev = dev;
+            else dev->Release();
         }
         return SUCCEEDED(hr);
     };
@@ -518,7 +514,7 @@ bool MakeTargets() {
         return false;
     }
     if (FAILED(d->CreateTexture(GR_FOG_TABLE_SIZE, 1, 1, TextureUsage(), D3DFMT_A8R8G8B8, TexturePool(), &g_r.fogTex,
-                                 nullptr)))
+                                nullptr)))
         g_r.fogTex = nullptr;
     // Black, and the depth buffer at its farthest.
     for (auto* c : g_r.color) {
@@ -944,8 +940,8 @@ void ApplyState() {
         DWORD magF = (tr.textureMode & SST_TMAGFILTER) ? D3DTEXF_LINEAR : D3DTEXF_POINT;
         DWORD aniso = 1;
         if (g_config.texLinear || g_config.anisotropy > 1) {
-            static const bool kAlpha[16] = {false, false, true, false, true, false, true, false,
-                                            true,  true,  false, true, true, true, true, false};
+            static const bool kAlpha[16] = {false, false, true,  false, true, false, true, false,
+                                            true,  true,  false, true,  true, true,  true, false};
             const bool cutout =
                 kAlpha[(tr.textureMode & SST_TFORMAT) >> SST_TFORMAT_SHIFT] || (r.fbzMode & SST_ENCHROMAKEY);
             if (g_config.texLinear && !cutout) minF = magF = D3DTEXF_LINEAR;
@@ -953,7 +949,8 @@ void ApplyState() {
                 D3DCAPS9 caps = {};
                 g_r.anisoLimit = 1;
                 if (SUCCEEDED(d->GetDeviceCaps(&caps)) && (caps.TextureFilterCaps & D3DPTFILTERCAPS_MINFANISOTROPIC))
-                    g_r.anisoLimit = std::max<DWORD>(1, std::min<DWORD>(DWORD(g_config.anisotropy), caps.MaxAnisotropy));
+                    g_r.anisoLimit =
+                        std::max<DWORD>(1, std::min<DWORD>(DWORD(g_config.anisotropy), caps.MaxAnisotropy));
                 GL_LOG("anisotropy: %lu (the GPU: up to %lu)", static_cast<unsigned long>(g_r.anisoLimit),
                        static_cast<unsigned long>(caps.MaxAnisotropy));
             }
@@ -976,12 +973,14 @@ void ApplyState() {
         if (b6 & 0x20) b6 -= 0x40;
         float lodBias = b6 / 4.0f;
         d->SetSamplerState(t, D3DSAMP_MIPMAPLODBIAS, FloatBits(lodBias));
-        d->SetSamplerState(t, D3DSAMP_ADDRESSU, (tr.tLOD & SST_LOD_TMIRRORS)     ? D3DTADDRESS_MIRROR
-                                                : (tr.textureMode & SST_TCLAMPS) ? D3DTADDRESS_CLAMP
-                                                                                 : D3DTADDRESS_WRAP);
-        d->SetSamplerState(t, D3DSAMP_ADDRESSV, (tr.tLOD & SST_LOD_TMIRRORT)     ? D3DTADDRESS_MIRROR
-                                                : (tr.textureMode & SST_TCLAMPT) ? D3DTADDRESS_CLAMP
-                                                                                 : D3DTADDRESS_WRAP);
+        d->SetSamplerState(t, D3DSAMP_ADDRESSU,
+                           (tr.tLOD & SST_LOD_TMIRRORS)     ? D3DTADDRESS_MIRROR
+                           : (tr.textureMode & SST_TCLAMPS) ? D3DTADDRESS_CLAMP
+                                                            : D3DTADDRESS_WRAP);
+        d->SetSamplerState(t, D3DSAMP_ADDRESSV,
+                           (tr.tLOD & SST_LOD_TMIRRORT)     ? D3DTADDRESS_MIRROR
+                           : (tr.textureMode & SST_TCLAMPT) ? D3DTADDRESS_CLAMP
+                                                            : D3DTADDRESS_WRAP);
         // Texture coordinates are in 256ths of the texture's longer side.
         const int asp = int((tr.tLOD & SST_LOD_ASPECT) >> SST_LOD_ASPECT_SHIFT);
         const bool sWide = (tr.tLOD & SST_LOD_S_IS_WIDER) != 0;
@@ -1503,8 +1502,10 @@ IDirect3DSurface9* PresentTarget(const SIZE& size) {
         const HRESULT hr = d->CreateAdditionalSwapChain(&pp, &g_r.chain);
         if (FAILED(hr)) {
             // (Refused too, as the device was: shown from the device's own back buffer.)
-            GL_LOG("device: a swap chain on the game window (%ldx%ld) refused: 0x%08lx; presenting into it from "
-                   "the helper's", size.cx, size.cy, static_cast<unsigned long>(hr));
+            GL_LOG(
+                "device: a swap chain on the game window (%ldx%ld) refused: 0x%08lx; presenting into it from "
+                "the helper's",
+                size.cx, size.cy, static_cast<unsigned long>(hr));
             g_r.chain = nullptr;
             g_r.chainRefused = true;
             if (FAILED(d->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) bb = nullptr;
@@ -1539,8 +1540,7 @@ bool Present() {
     const UINT ch = own ? std::min<UINT>(g_r.bbH, g_r.deviceWindow == hwnd ? g_r.bbH : UINT(want.cy)) : UINT(want.cy);
     // voodoolook: the frame dithered to 16 bits first (into look), shown from there.
     IDirect3DTexture9* frame = g_r.color[0];
-    if (g_r.ditherPs &&
-        MakeTexture(&g_r.look, g_r.w, g_r.h, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT)) {
+    if (g_r.ditherPs && MakeTexture(&g_r.look, g_r.w, g_r.h, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT)) {
         IDirect3DSurface9* ls = nullptr;
         if (SUCCEEDED(g_r.look->GetSurfaceLevel(0, &ls))) {
             d->SetRenderTarget(0, ls);
@@ -1595,7 +1595,7 @@ bool Present() {
     d->SetTexture(0, nullptr);
     bb->Release();
     const RECT part = {0, 0, LONG(cw), LONG(ch)};
-    const HRESULT hr = g_r.chain                     ? g_r.chain->Present(nullptr, nullptr, nullptr, nullptr, 0)
+    const HRESULT hr = g_r.chain                  ? g_r.chain->Present(nullptr, nullptr, nullptr, nullptr, 0)
                        : g_r.deviceWindow == hwnd ? d->Present(nullptr, nullptr, nullptr, nullptr)
                                                   : d->Present(&part, nullptr, hwnd, nullptr);
     g_r.batchState = false;  // (the targets changed)
@@ -1675,8 +1675,8 @@ enum : unsigned { kLfbDepthOut = 1u << 16, kLfbChroma = 1u << 17, kLfbPipeline =
 IDirect3DPixelShader9* LfbShader(uint64_t key) {
     auto it = g_r.lfbShaders.find(key);
     if (it != g_r.lfbShaders.end()) return it->second;
-    const FxU32 f = key & 0xFFFF;              // the fog bits (fogMode's low ones)
-    const FxU32 blend = FxU32(key >> 32);      // alphaMode's test and factors: blended here
+    const FxU32 f = key & 0xFFFF;          // the fog bits (fogMode's low ones)
+    const FxU32 blend = FxU32(key >> 32);  // alphaMode's test and factors: blended here
     std::string s =
         "sampler2D col : register(s0);\nsampler2D aux : register(s1);\nsampler2D fogTab : register(s2);\n"
         "sampler2D dstTex : register(s3);\n"
@@ -1747,8 +1747,8 @@ bool RenderReadBuffer(int buffer, std::vector<FxU32>* out) {
         if (!g_r.readSmallSys && FAILED(d->CreateOffscreenPlainSurface(W, H, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM,
                                                                        &g_r.readSmallSys, nullptr)))
             g_r.readSmallSys = nullptr;
-        if (g_r.readSmall && g_r.readSmallSys && SUCCEEDED(d->StretchRect(rt, nullptr, g_r.readSmall, nullptr,
-                                                                          D3DTEXF_POINT))) {
+        if (g_r.readSmall && g_r.readSmallSys &&
+            SUCCEEDED(d->StretchRect(rt, nullptr, g_r.readSmall, nullptr, D3DTEXF_POINT))) {
             src = g_r.readSmall;
             sys = g_r.readSmallSys;
         }
@@ -1808,8 +1808,8 @@ bool RenderReadAux(std::vector<FxU16>* out) {
     // Drawn into floats at the game's size (point sampling: each pixel's middle sample).
     if (!g_r.auxReadPs || !MakeTexture(&g_r.auxRead, W, H, D3DUSAGE_RENDERTARGET, D3DFMT_R32F, D3DPOOL_DEFAULT))
         return false;
-    if (!g_r.auxReadback && FAILED(d->CreateOffscreenPlainSurface(W, H, D3DFMT_R32F, D3DPOOL_SYSTEMMEM,
-                                                                  &g_r.auxReadback, nullptr))) {
+    if (!g_r.auxReadback &&
+        FAILED(d->CreateOffscreenPlainSurface(W, H, D3DFMT_R32F, D3DPOOL_SYSTEMMEM, &g_r.auxReadback, nullptr))) {
         g_r.auxReadback = nullptr;
         return false;
     }
@@ -1895,7 +1895,8 @@ void RenderWritePixels(int buffer, int x, int y, int w, int h, const FxU32* argb
                 if (m) {
                     FxU32 m4;
                     memcpy(&m4, m + i, 4);
-                    const __m128i written = _mm_unpacklo_epi16(_mm_unpacklo_epi8(_mm_cvtsi32_si128(int(m4)), zero), zero);
+                    const __m128i written =
+                        _mm_unpacklo_epi16(_mm_unpacklo_epi8(_mm_cvtsi32_si128(int(m4)), zero), zero);
                     v = _mm_andnot_si128(_mm_cmpeq_epi32(written, zero), v);  // not written: 0
                 }
                 _mm_storeu_si128(reinterpret_cast<__m128i*>(crow + i), v);

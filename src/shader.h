@@ -10,16 +10,16 @@ namespace gl2d9 {
 
 // What selects a pixel shader: the combine and fog bits of the registers.
 struct ShaderKey {
-    FxU32 colorPath;   // fbzColorPath: selects, combine bits, texture enable
+    FxU32 colorPath;  // fbzColorPath: selects, combine bits, texture enable
     FxU32 fogMode;
     FxU32 tmuMode[2];  // each TMU's combine bits (0: not used)
     FxU8 tmus;         // TMUs taking part (0 without texturing)
     FxU8 chromaKey;
-    FxU8 delta0;       // the ITRGB_DELTA0 constant replaces the iterated color
-    FxU8 stipple;      // 0: off, 1: pattern, 2: rotated
-    FxU32 blend;       // alphaMode (blend factors, alpha test): blended in the shader (0: by Direct3D)
-    FxU8 depthConst;   // GR_DEPTHBUFFER_*_COMPARE_TO_BIAS: the depth tested is zaColor's (c11.x)
-    FxU8 depthOut;     // the shader writes the depth (DEPTH_* bits below)
+    FxU8 delta0;      // the ITRGB_DELTA0 constant replaces the iterated color
+    FxU8 stipple;     // 0: off, 1: pattern, 2: rotated
+    FxU32 blend;      // alphaMode (blend factors, alpha test): blended in the shader (0: by Direct3D)
+    FxU8 depthConst;  // GR_DEPTHBUFFER_*_COMPARE_TO_BIAS: the depth tested is zaColor's (c11.x)
+    FxU8 depthOut;    // the shader writes the depth (DEPTH_* bits below)
     bool operator==(const ShaderKey& o) const;
 };
 enum : FxU8 { DEPTH_Z = 1, DEPTH_W = 2, DEPTH_BIAS = 4, DEPTH_OVERLAY = 8 };
@@ -51,9 +51,9 @@ enum {
     kPsDetail0,
     kPsDetail1,
     kPsDelta0,
-    kPsStipple,  // the pattern's four bytes (y & 3 selects one)
-    kPsTarget,   // x: 1 / scale, y: the alpha test's reference (0..255), zw: 1 / the target's size
-    kPsDepth,    // x: the depth of zaColor (compare to bias), as drawn; y: the depth bias; z: overlaybias
+    kPsStipple,      // the pattern's four bytes (y & 3 selects one)
+    kPsTarget,       // x: 1 / scale, y: the alpha test's reference (0..255), zw: 1 / the target's size
+    kPsDepth,        // x: the depth of zaColor (compare to bias), as drawn; y: the depth bias; z: overlaybias
     kPsStippleRows,  // rotate mode's row table (s4): x: screen height - 1, y: 1 if Y flipped, zw: 1 / its size
 };
 

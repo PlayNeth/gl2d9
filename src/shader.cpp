@@ -56,11 +56,11 @@ std::string TmuCombine(int t, FxU32 m, const std::string& otherVar) {
     auto factor = [&](FxU32 sel, bool alpha) -> std::string {
         switch (sel) {
         case 0: return "0";
-        case 1: return alpha ? L + ".a" : L + ".rgb";      // local
-        case 2: return otherVar + ".a";                      // other alpha
-        case 3: return L + ".a";                             // local alpha
-        case 4: return "detail" + std::to_string(t);         // detail factor
-        case 5: return "lodfrac" + std::to_string(t);        // LOD fraction
+        case 1: return alpha ? L + ".a" : L + ".rgb";  // local
+        case 2: return otherVar + ".a";                // other alpha
+        case 3: return L + ".a";                       // local alpha
+        case 4: return "detail" + std::to_string(t);   // detail factor
+        case 5: return "lodfrac" + std::to_string(t);  // LOD fraction
         default: return "0";
         }
     };
@@ -189,8 +189,7 @@ std::string Generate(const ShaderKey& k) {
             if (UsesLocal(m) || ((m & SST_TC_MSELECT) >> SST_TC_MSELECT_SHIFT) >= 4 ||
                 ((m & SST_TCA_MSELECT) >> SST_TCA_MSELECT_SHIFT) >= 4)
                 s += "  float4 l" + T + " = tex2D(tex" + T + ", uv" + T + ");\n";
-            else
-                s += "  float4 l" + T + " = 0;\n";
+            else s += "  float4 l" + T + " = 0;\n";
             // LOD (in levels of the 256-texel space) for the detail and LOD-fraction factors.
             s += "  float2 dx" + T + " = ddx(uv" + T + " * texScale" + T + ".zw), dy" + T + " = ddy(uv" + T +
                  " * texScale" + T + ".zw);\n";
@@ -294,11 +293,9 @@ std::string Generate(const ShaderKey& k) {
         // overlaybias (dd2d9's): pulled forward N steps and the depth's change over a pixel
         // (its slope), so that rounding the surface and the overlay differently (cut into
         // other polygons) can't fail the depth test on half its pixels in a fine hatch.
-        if (k.depthOut & DEPTH_OVERLAY)
-            s += "  dv = max(dv - depthK.z - max(abs(ddx(dv)), abs(ddy(dv))), 0);\n";
+        if (k.depthOut & DEPTH_OVERLAY) s += "  dv = max(dv - depthK.z - max(abs(ddx(dv)), abs(ddy(dv))), 0);\n";
         s += "  Out o;\n  o.c = float4(c, a);\n  o.z = (dv + 0.5) / 65536;\n  return o;\n}\n";
-    }
-    else s += "  return float4(c, a);\n}\n";
+    } else s += "  return float4(c, a);\n}\n";
     return s;
 }
 

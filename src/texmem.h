@@ -17,16 +17,16 @@ FxU32 LevelAddress(FxU32 baseBytes, GrLOD_t lod, GrAspectRatio_t aspect, GrTextu
 // A texture as a TMU's registers describe it.
 struct TexDesc {
     GrChipID_t tmu;
-    int format;          // GR_TEXFMT_*
-    FxU32 base;          // bytes: where a 256 level would start
-    bool multibase;      // levels 256, 128, 64 and the rest each from their own base (grTexMultibase)
+    int format;      // GR_TEXFMT_*
+    FxU32 base;      // bytes: where a 256 level would start
+    bool multibase;  // levels 256, 128, 64 and the rest each from their own base (grTexMultibase)
     FxU32 bases[4];
-    int lodMin, lodMax;  // Glide 2 LODs: the largest and the smallest level used
-    GrAspectRatio_t aspect;  // Glide 2 aspect
-    bool tsplit, odd;    // levels of one parity only (two-TMU trilinear)
-    unsigned tableHash;  // the palette / NCC table it is decoded with (0: none used)
-    int nccTable;        // which NCC table
-    int width, height;   // its largest level used
+    int lodMin, lodMax;        // Glide 2 LODs: the largest and the smallest level used
+    GrAspectRatio_t aspect;    // Glide 2 aspect
+    bool tsplit, odd;          // levels of one parity only (two-TMU trilinear)
+    unsigned tableHash;        // the palette / NCC table it is decoded with (0: none used)
+    int nccTable;              // which NCC table
+    int width, height;         // its largest level used
     FxU32 spanStart, spanEnd;  // the memory it occupies
 };
 bool DescribeTexture(GrChipID_t tmu, const TmuRegs& r, TexDesc* d);

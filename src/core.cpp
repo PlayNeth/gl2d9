@@ -42,16 +42,14 @@ struct ResSize {
     int w, h;
 };
 const ResSize kRes[] = {
-    {320, 200},   {320, 240},   {400, 256},   {512, 384},   {640, 200},   {640, 350},   {640, 400},  {640, 480},
-    {800, 600},   {960, 720},   {856, 480},   {512, 256},   {1024, 768},  {1280, 1024}, {1600, 1200}, {400, 300},
-    {1152, 864},  {1280, 960},  {1600, 1024}, {1792, 1344}, {1856, 1392}, {1920, 1440}, {2048, 1536}, {2048, 2048},
+    {320, 200},  {320, 240},  {400, 256},   {512, 384},   {640, 200},   {640, 350},   {640, 400},   {640, 480},
+    {800, 600},  {960, 720},  {856, 480},   {512, 256},   {1024, 768},  {1280, 1024}, {1600, 1200}, {400, 300},
+    {1152, 864}, {1280, 960}, {1600, 1024}, {1792, 1344}, {1856, 1392}, {1920, 1440}, {2048, 1536}, {2048, 2048},
 };
 
 // Games snapping their vertices to 1/16 pixel add (3 << 18) and take it off again; one that
 // leaves it on (Glide's own debug output allows for it) is brought back to the screen.
-inline float Unsnap(float v) {
-    return std::fabs(v) >= 262144.0f ? v - 786432.0f : v;
-}
+inline float Unsnap(float v) { return std::fabs(v) >= 262144.0f ? v - 786432.0f : v; }
 
 // Glide's triangle setup: zero-area triangles are dropped, and the culled side by the sign
 // of the area (dxAB * dyBC - dxBC * dyAB): GR_CULL_NEGATIVE drops it negative, POSITIVE
@@ -154,9 +152,7 @@ void CallFailed(const char* where) {
     if (std::exception_ptr e = std::current_exception()) {
         try {
             std::rethrow_exception(e);
-        } catch (const std::exception& x) {
-            what = x.what();
-        } catch (...) {
+        } catch (const std::exception& x) { what = x.what(); } catch (...) {
         }
     }
     // The first five logged, then every hundredth (a game out of memory fails call after call).
@@ -166,8 +162,7 @@ void CallFailed(const char* where) {
     try {
         Guard guard;
         RenderRecover();
-    } catch (...) {
-    }
+    } catch (...) {}
 }
 
 void CoreInit() {
@@ -218,8 +213,8 @@ FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refres
     GuTexMemReset();
     st::InitState(origin == GR_ORIGIN_LOWER_LEFT ? GR_ORIGIN_LOWER_LEFT : GR_ORIGIN_UPPER_LEFT);
     GL_LOG("grSstWinOpen: %dx%d, %s origin, %d color / %d aux buffers, refresh %ld", w, h,
-           origin == GR_ORIGIN_LOWER_LEFT ? "lower left" : "upper left", g_board.numColorBuffers,
-           g_board.numAuxBuffers, static_cast<long>(refresh));
+           origin == GR_ORIGIN_LOWER_LEFT ? "lower left" : "upper left", g_board.numColorBuffers, g_board.numAuxBuffers,
+           static_cast<long>(refresh));
     try {
         if (!WindowOpen(hwnd)) return FXFALSE;
         if (!RenderOpen(g_board.hwnd)) {
@@ -406,9 +401,8 @@ FxU32 CoreTexMaxAddress(GrChipID_t tmu) {
     return g_board.tmuMem - 8;
 }
 
-void CoreTexDownloadLevel(GrChipID_t tmu, FxU32 startAddress, GrLOD_t thisLod, GrLOD_t largeLod,
-                          GrAspectRatio_t aspect, GrTextureFormat_t format, FxU32 evenOdd, const void* data, int t,
-                          int maxT) {
+void CoreTexDownloadLevel(GrChipID_t tmu, FxU32 startAddress, GrLOD_t thisLod, GrLOD_t largeLod, GrAspectRatio_t aspect,
+                          GrTextureFormat_t format, FxU32 evenOdd, const void* data, int t, int maxT) {
     DownloadLevel(tmu, startAddress, thisLod, largeLod, aspect, format, evenOdd, data, t, maxT);
 }
 

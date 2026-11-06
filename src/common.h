@@ -52,19 +52,32 @@ std::wstring ShaderCachePath();
 
 // ---------------------------------------------------------------- logging
 void LogInit();
-void ApplyCpus();   // cpus=: the processors the process runs on (after LogInit: logged)
-void LimitFrame();  // fpslimit=: waits out the rest of the frame's time (at the buffer swap)
+void ApplyCpus();                      // cpus=: the processors the process runs on (after LogInit: logged)
+void LimitFrame();                     // fpslimit=: waits out the rest of the frame's time (at the buffer swap)
 void LimitSwapInterval(int interval);  // vsync=auto: grBufferSwap(2 or more), frames that many refreshes apart
-extern int g_logLevel;  // (util.cpp) read at every log and trace site: inline
+extern int g_logLevel;                 // (util.cpp) read at every log and trace site: inline
 inline int LogLevel() { return g_logLevel; }
 void Log(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 void LogFlush(bool processExit);
 void CrashLoggerRemove();  // before the DLL is unloaded (FreeLibrary)
 
-#define GL_LOG(...) do { if (::gl2d9::LogLevel() >= 1) ::gl2d9::Log(1, __VA_ARGS__); } while (0)
-#define GL_TRACE(...) do { if (::gl2d9::LogLevel() >= 2) ::gl2d9::Log(2, __VA_ARGS__); } while (0)
+#define GL_LOG(...)                                                 \
+    do {                                                            \
+        if (::gl2d9::LogLevel() >= 1) ::gl2d9::Log(1, __VA_ARGS__); \
+    } while (0)
+#define GL_TRACE(...)                                               \
+    do {                                                            \
+        if (::gl2d9::LogLevel() >= 2) ::gl2d9::Log(2, __VA_ARGS__); \
+    } while (0)
 // Logs the first call of an unimplemented or partially implemented path.
-#define GL_STUB(what) do { static bool once_; if (!once_) { once_ = true; GL_LOG("stub: %s", what); } } while (0)
+#define GL_STUB(what)                 \
+    do {                              \
+        static bool once_;            \
+        if (!once_) {                 \
+            once_ = true;             \
+            GL_LOG("stub: %s", what); \
+        }                             \
+    } while (0)
 
 // ---------------------------------------------------------------- global lock
 // Glide is single-threaded by contract, but the window procedure (focus changes) and the
@@ -93,8 +106,8 @@ T CallFailed(const char* where, T value) {
 // CallFailed(__func__, FXFALSE); }. ENTRY takes gl2d9's lock for the call (released before the
 // handler runs, by unwinding) and traces it.
 #define GLAPI extern "C" __attribute__((stdcall))
-#define ENTRY(name)          \
-    ::gl2d9::Guard guard_;   \
+#define ENTRY(name)        \
+    ::gl2d9::Guard guard_; \
     GL_TRACE("%s", name)
 
 }  // namespace gl2d9

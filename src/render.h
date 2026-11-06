@@ -7,11 +7,11 @@ namespace gl2d9 {
 // A vertex as the Voodoo's triangle setup takes it (screen coordinates, Glide's units).
 struct RVtx {
     float x, y;
-    float ooz;  // Z buffer value (0..65535)
-    float oow;  // 1/w (the FBI's)
-    float r, g, b, a;  // 0..255
+    float ooz;                      // Z buffer value (0..65535)
+    float oow;                      // 1/w (the FBI's)
+    float r, g, b, a;               // 0..255
     float sow[2], tow[2], oowt[2];  // per TMU: s/w, t/w (256-texel units) and its 1/w
-    float fog;  // what the fog table is looked up with (1/w, or Glide 3's fog coordinate)
+    float fog;                      // what the fog table is looked up with (1/w, or Glide 3's fog coordinate)
 };
 
 bool RenderOpen(HWND hwnd);  // the device and the buffers, at g_board.screenW x screenH
