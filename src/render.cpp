@@ -225,7 +225,8 @@ D3DPRESENT_PARAMETERS Params();
 
 void DiagnoseCreateDevice() {
     using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
-    OSVERSIONINFOW real = {sizeof(real)}, told = {sizeof(told)};
+    OSVERSIONINFOW real = {}, told = {};
+    real.dwOSVersionInfoSize = told.dwOSVersionInfoSize = sizeof(OSVERSIONINFOW);
     if (auto fn = reinterpret_cast<RtlGetVersionFn>(
             reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"))))
         fn(&real);
@@ -251,7 +252,8 @@ void DiagnoseCreateDevice() {
     // The modules loaded (DLLs that could hook Direct3D: overlays, wrappers, another d3d9).
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
     if (snap != INVALID_HANDLE_VALUE) {
-        MODULEENTRY32W me = {sizeof(me)};
+        MODULEENTRY32W me = {};
+        me.dwSize = sizeof(me);
         std::string list;
         for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me)) {
             char path[MAX_PATH * 2];

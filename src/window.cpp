@@ -28,14 +28,50 @@ struct WindowState {
     bool hooked = false;
     LONG style = 0, exStyle = 0;  // as the game had them
     RECT rect = {};
-    bool restyled = false;
+    bool restyled = false;     // style, exStyle and rect kept (KeepGameStyle); with ourStyle, under g_hookLock
+    LONG ourStyle = 0;         // the style gl2d9 gave the window (Cover, Windowed)
+    RECT ourRect = {};         // and where it put it
     int display = kDisplayBorderless;  // as opened (switch falls back to borderless)
     bool switched = false;     // the display mode is the screen's
     wchar_t device[CCHDEVICENAME] = {};
-    bool suspended = false;    // minimized with focus lost
+    bool suspended = false;    // focus away: minimized, or opened with another program in front
     bool quiet = false;        // gl2d9 moving the window itself
 };
 WindowState g_w;
+
+// For the StaleHooks and the kept style (g_w.restyled, style, exStyle, rect, ourStyle), which
+// the window's thread and a game's drawing thread both change. Held briefly, never while
+// sending a window a message; taken after gl2d9's lock where both are.
+struct HookLock {
+    CRITICAL_SECTION cs;
+    HookLock() { InitializeCriticalSection(&cs); }
+} g_hookLock;
+struct HookGuard {
+    HookGuard() { EnterCriticalSection(&g_hookLock.cs); }
+    ~HookGuard() { LeaveCriticalSection(&g_hookLock.cs); }
+    HookGuard(const HookGuard&) = delete;
+    HookGuard& operator=(const HookGuard&) = delete;
+};
+
+// A kHideCursor posted and not handled yet (one at a time: asked each frame).
+volatile LONG g_cursorAsked;
+
+// Another program's window in front (none in front, as in the middle of a switch: not).
+bool AnotherInFront() {
+    const HWND f = GetForegroundWindow();
+    DWORD pid = 0;
+    return f && GetWindowThreadProcessId(f, &pid) && pid != GetCurrentProcessId();
+}
+
+// This process's window in front (none in front, as in the middle of a switch: not).
+bool OursInFront() {
+    const HWND f = GetForegroundWindow();
+    DWORD pid = 0;
+    return f && GetWindowThreadProcessId(f, &pid) && pid == GetCurrentProcessId();
+}
+
+// Whether the calling thread is the window's own.
+bool OnWindowThread(HWND h) { return GetWindowThreadProcessId(h, nullptr) == GetCurrentThreadId(); }
 
 const wchar_t kClass[] = L"gl2d9";
 
@@ -61,7 +97,7 @@ RECT MonitorRect(HWND h, wchar_t* device = nullptr) {
 // SetWindowPos from the window's own thread, or asynchronously from another (whose
 // waiting for that thread could deadlock with a game thread waiting for this one).
 void PlaceWindow(HWND insertAfter, const RECT& r, UINT flags) {
-    if (GetWindowThreadProcessId(g_w.hwnd, nullptr) != GetCurrentThreadId()) flags |= SWP_ASYNCWINDOWPOS;
+    if (!OnWindowThread(g_w.hwnd)) flags |= SWP_ASYNCWINDOWPOS;
     g_w.quiet = true;
     SetWindowPos(g_w.hwnd, insertAfter, r.left, r.top, r.right - r.left, r.bottom - r.top, flags);
     g_w.quiet = false;
@@ -99,31 +135,53 @@ void RestoreMode() {
     GL_LOG("display: desktop mode restored");
 }
 
+// The style, extended style and place the game gave its window, kept before gl2d9 changes
+// them (put back by WindowClose). (Opened again on a window closed and not yet put back
+// (kRestore), Hook took those it had then.)
+void KeepGameStyle() {
+    if (g_w.own) return;
+    {
+        HookGuard guard;
+        if (g_w.restyled) return;
+    }
+    const LONG style = GetWindowLongW(g_w.hwnd, GWL_STYLE), ex = GetWindowLongW(g_w.hwnd, GWL_EXSTYLE);
+    RECT rect = {};
+    GetWindowRect(g_w.hwnd, &rect);
+    HookGuard guard;
+    g_w.style = style;
+    g_w.exStyle = ex;
+    g_w.rect = rect;
+    g_w.restyled = true;
+}
+
+// The style gl2d9 has given the window, and where it put it (where it is, placed from its own
+// thread: a window manager may have adjusted it): put back on closing only over them
+// (RestoreClosed).
+void NoteOurStyle(const RECT& placed) {
+    const LONG style = GetWindowLongW(g_w.hwnd, GWL_STYLE);
+    RECT r = placed;
+    if (OnWindowThread(g_w.hwnd)) GetWindowRect(g_w.hwnd, &r);
+    HookGuard guard;
+    g_w.ourStyle = style;
+    g_w.ourRect = r;
+}
+
 // The window over the whole monitor, frameless, in front.
 void Cover() {
     const RECT m = MonitorRect(g_w.hwnd, g_w.device);
-    if (!g_w.restyled && !g_w.own) {
-        g_w.style = GetWindowLongW(g_w.hwnd, GWL_STYLE);
-        g_w.exStyle = GetWindowLongW(g_w.hwnd, GWL_EXSTYLE);
-        GetWindowRect(g_w.hwnd, &g_w.rect);
-        g_w.restyled = true;
-    }
+    KeepGameStyle();
     SetWindowLongW(g_w.hwnd, GWL_STYLE,
                    (GetWindowLongW(g_w.hwnd, GWL_STYLE) & ~(WS_OVERLAPPEDWINDOW | WS_DLGFRAME | WS_BORDER)) | WS_POPUP);
     SetWindowLongW(
         g_w.hwnd, GWL_EXSTYLE,
         GetWindowLongW(g_w.hwnd, GWL_EXSTYLE) & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME));
     PlaceWindow(HWND_TOPMOST, m, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    NoteOurStyle(m);
 }
 
 // An ordinary window, its client area the screen's size, centered on its monitor's work area.
 void Windowed() {
-    if (!g_w.restyled && !g_w.own) {
-        g_w.style = GetWindowLongW(g_w.hwnd, GWL_STYLE);
-        g_w.exStyle = GetWindowLongW(g_w.hwnd, GWL_EXSTYLE);
-        GetWindowRect(g_w.hwnd, &g_w.rect);
-        g_w.restyled = true;
-    }
+    KeepGameStyle();
     LONG style = GetWindowLongW(g_w.hwnd, GWL_STYLE);
     if (!(style & WS_CAPTION)) {  // a frameless game window: given a frame to move it by
         style = (style & ~WS_POPUP) | WS_OVERLAPPEDWINDOW;
@@ -140,6 +198,7 @@ void Windowed() {
     const LONG x = mi.rcWork.left + std::max<LONG>(0, (mi.rcWork.right - mi.rcWork.left - w) / 2);
     const LONG y = mi.rcWork.top + std::max<LONG>(0, (mi.rcWork.bottom - mi.rcWork.top - h) / 2);
     PlaceWindow(HWND_NOTOPMOST, RECT{x, y, x + w, y + h}, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    NoteOurStyle(RECT{x, y, x + w, y + h});
 }
 
 // The picture drawn again where nothing else is drawing (a game drawing on another thread
@@ -150,6 +209,22 @@ void RefreshIfFree() {
     LeaveCriticalSection(&g_lock);
 }
 
+UINT ShowMsg();
+void RestoreClosed(HWND h);
+enum : WPARAM { kShow, kMinimize, kRestore, kHideCursor, kActivate };  // ShowMsg's wParam
+
+// What has the foreground, for the log: its class, and whose it is.
+void DescribeForeground(char* out, size_t size) {
+    HWND f = GetForegroundWindow();
+    char cls[64] = "none";
+    if (f) GetClassNameA(f, cls, sizeof(cls));
+    DWORD pid = 0;
+    if (f) GetWindowThreadProcessId(f, &pid);
+    snprintf(out, size, "%s, %s", cls, !f ? "-" : f == g_w.hwnd ? "the game's window"
+                                            : pid == GetCurrentProcessId() ? "this program's"
+                                                                           : "another program's");
+}
+
 // Focus lost or back (WM_ACTIVATEAPP), on the window's own thread. Without gl2d9's lock: a
 // game drawing on another thread holds it most of the time (through Present, waiting for
 // the display), and the focus change, waiting for it, was dropped (Unreal: the window left
@@ -157,14 +232,24 @@ void RefreshIfFree() {
 // thread; the device, lost by a mode change, is Reset by the thread that draws.
 void Activate(bool active) {
     if (g_w.display == kDisplayWindow || !g_w.hwnd || !g_board.open) return;
+    char fg[128];
     if (!active && !g_w.suspended) {
-        GL_LOG("focus lost: %s", g_w.switched ? "desktop mode restored, minimized" : "minimized");
+        DescribeForeground(fg, sizeof(fg));
+        GL_LOG("focus lost: %s (foreground: %s)", g_w.switched ? "desktop mode restored, minimizing" : "minimizing",
+               fg);
         g_w.suspended = true;
         RestoreMode();
         PlaceWindow(HWND_NOTOPMOST, RECT{}, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        ShowWindow(g_w.hwnd, SW_MINIMIZE);
+        // Minimized once Windows has finished moving the focus, not inside WM_ACTIVATEAPP: a
+        // minimize there (SW_MINIMIZE, which activates the next window) made a second switch
+        // within Windows' own, which gave the game the focus back at once, its window left
+        // minimized (Windows' Alt+Tab, NFS 3: the mouse held by the game, the game not coming
+        // back). SW_SHOWMINNOACTIVE activates nothing; and done only if the focus is still
+        // away by then (ShowMsg's handler).
+        if (!ShowMsg() || !PostMessageW(g_w.hwnd, ShowMsg(), kMinimize, 0)) ShowWindowAsync(g_w.hwnd, SW_SHOWMINNOACTIVE);
     } else if (active && g_w.suspended) {
-        GL_LOG("focus back");
+        DescribeForeground(fg, sizeof(fg));
+        GL_LOG("focus back (foreground: %s)", fg);
         g_w.suspended = false;
         if (IsIconic(g_w.hwnd)) ShowWindow(g_w.hwnd, SW_RESTORE);
         // (The game's own procedure, restoring, may have closed Glide: no mode switched for it.)
@@ -187,8 +272,8 @@ void ShowNow() {
     else Cover();
 }
 void Show() {
-    if (g_w.hooked && GetWindowThreadProcessId(g_w.hwnd, nullptr) != GetCurrentThreadId() && ShowMsg() &&
-        PostMessageW(g_w.hwnd, ShowMsg(), 0, 0))
+    if (g_w.hooked && !OnWindowThread(g_w.hwnd) && ShowMsg() &&
+        PostMessageW(g_w.hwnd, ShowMsg(), kShow, 0))
         return;
     ShowNow();
 }
@@ -199,10 +284,18 @@ void Show() {
 // a second HookProc, below the other subclass, would call it, which calls the first HookProc,
 // and so on (NFS High Stakes, 640x480 menus then a 1600x1200 race, with dd2d9: the stack
 // overflowed at once, nothing logged).
+// Closed from another thread (WindowClose), a StaleHook keeps too what kRestore puts back:
+// the game's style, extended style and place, over the style gl2d9 gave the window only
+// (ourStyle: one the game set since is left alone), and whether the focus was away (the window
+// kept minimized).
 struct StaleHook {
-    HWND hwnd;
-    WNDPROC orig;
-    bool unicode;
+    HWND hwnd = nullptr;
+    WNDPROC orig = nullptr;
+    bool unicode = false;
+    bool restore = false;
+    LONG style = 0, exStyle = 0, ourStyle = 0;
+    RECT rect = {}, ourRect = {};
+    bool away = false;
 };
 StaleHook g_stale[8];
 
@@ -257,19 +350,54 @@ LRESULT CALLBACK HookProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    // gl2d9's own: the window covered or made a window (Show), never the game's.
+    // gl2d9's own, never the game's: the window covered or made a window (Show), or
+    // minimized with the focus lost (Activate).
     if (const UINT show = ShowMsg(); show && msg == show) {
-        if (h == g_w.hwnd && g_w.hooked && !g_w.suspended) ShowNow();  // (the board may not be open yet)
+        if (wp == kHideCursor) InterlockedExchange(&g_cursorAsked, 0);  // (whatever became of the window)
+        if (wp == kRestore) {
+            RestoreClosed(h);
+            return 0;
+        }
+        if (wp == kMinimize) {
+            // Still away: open on it (suspended), or closed on it since, another program in front.
+            bool away = false;
+            if (h == g_w.hwnd && g_w.hooked) {
+                away = g_w.suspended;
+            } else {
+                bool stale;
+                {
+                    HookGuard guard;
+                    stale = FindStale(h) != nullptr;
+                }
+                away = stale && !OursInFront();
+            }
+            if (away && !IsIconic(h)) ShowWindow(h, SW_SHOWMINNOACTIVE);
+            return 0;
+        }
+        if (h != g_w.hwnd || !g_w.hooked) return 0;
+        if (wp == kHideCursor) {
+            if (!g_w.suspended) SetCursor(nullptr);
+        } else if (wp == kActivate) {
+            if (g_w.suspended && g_board.open && OursInFront()) Activate(true);  // (see WindowOpened)
+        } else if (!g_w.suspended) {
+            ShowNow();  // (the board may not be open yet)
+        }
         return 0;
     }
     if (h != g_w.hwnd || !g_w.hooked) {
         // A window gl2d9 is no longer open on, still in its chain: its own procedure.
-        if (StaleHook* e = FindStale(h)) {
-            const WNDPROC orig = e->orig;
-            const bool unicode = e->unicode;
-            if (msg == WM_NCDESTROY) *e = StaleHook{};
-            return CallProc(orig, unicode, h, msg, wp, lp);
+        WNDPROC orig = nullptr;
+        bool unicode = false, stale = false;
+        {
+            HookGuard guard;
+            if (StaleHook* e = FindStale(h)) {
+                orig = e->orig;
+                unicode = e->unicode;
+                stale = true;
+                if (msg == WM_NCDESTROY) *e = StaleHook{};
+            }
         }
+        if (stale) return CallProc(orig, unicode, h, msg, wp, lp);
         if (h == g_w.hwnd) return CallOrig(h, msg, wp, lp);
         return IsWindowUnicode(h) ? DefWindowProcW(h, msg, wp, lp) : DefWindowProcA(h, msg, wp, lp);
     }
@@ -289,6 +417,15 @@ LRESULT HookProcBody(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         Activate(wp != 0);
         break;
     case WM_PAINT:
+        if (g_w.suspended) {
+            // Focus away: painted here, not by the game. A game may take the foreground back
+            // as it paints (NFS 3: SetForegroundWindow in its WM_PAINT while fullscreen), and
+            // a paint comes with the switch itself (Alt+Tab's switcher over the window): the
+            // game was back in front at once, the desktop only flashing.
+            PAINTSTRUCT ps;
+            if (BeginPaint(h, &ps)) EndPaint(h, &ps);
+            return 0;
+        }
         if (g_board.open && TryEnterCriticalSection(&g_lock)) {
             RenderRefresh();
             LeaveCriticalSection(&g_lock);
@@ -379,13 +516,25 @@ void Hook() {
         pinned = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                                     reinterpret_cast<LPCWSTR>(&HookProc), &self) != FALSE;
     }
-    if (StaleHook* e = FindStale(g_w.hwnd)) {  // still in its chain from before: taken back
-        g_w.unicode = e->unicode;
-        g_w.orig = e->orig;
-        g_w.hooked = true;
-        *e = StaleHook{};
-        GL_LOG("window %p: still hooked from before (something subclassed it since)", static_cast<void*>(g_w.hwnd));
-        return;
+    {
+        HookGuard guard;
+        if (StaleHook* e = FindStale(g_w.hwnd)) {  // still in its chain from before: taken back
+            g_w.unicode = e->unicode;
+            g_w.orig = e->orig;
+            g_w.hooked = true;
+            if (e->restore) {  // closed, not put back yet: the game's style is the one kept then
+                g_w.style = e->style;
+                g_w.exStyle = e->exStyle;
+                g_w.rect = e->rect;
+                g_w.ourStyle = e->ourStyle;
+                g_w.ourRect = e->ourRect;
+                g_w.restyled = true;
+            }
+            GL_LOG("window %p: still hooked from before (%s)", static_cast<void*>(g_w.hwnd),
+                   e->restore ? "closed, not put back yet" : "something subclassed it since");
+            *e = StaleHook{};
+            return;
+        }
     }
     g_w.unicode = IsWindowUnicode(g_w.hwnd) != FALSE;
     g_w.orig = reinterpret_cast<WNDPROC>(GetProc(g_w.hwnd, g_w.unicode));
@@ -398,20 +547,107 @@ void Hook() {
     g_w.hooked = true;
 }
 
-void Unhook() {
-    if (!g_w.hooked || !g_w.hwnd || !IsWindow(g_w.hwnd)) return;
-    // Something subclassed the window after gl2d9: it stays in the chain, passing messages on,
-    // and is remembered (StaleHook) for gl2d9 opening on it again.
-    if (GetProc(g_w.hwnd, g_w.unicode) == reinterpret_cast<LONG_PTR>(HookProc)) {
-        SetProc(g_w.hwnd, g_w.unicode, reinterpret_cast<LONG_PTR>(g_w.orig));
-    } else {
-        StaleHook* e = FindStale(g_w.hwnd);
-        for (StaleHook& s : g_stale)
-            if (!e && (!s.hwnd || !IsWindow(s.hwnd))) e = &s;
-        if (e) *e = StaleHook{g_w.hwnd, g_w.orig, g_w.unicode};
-        else GL_LOG("window %p: left hooked, no room to remember it", static_cast<void*>(g_w.hwnd));
+// gl2d9's hook left in the window's chain, passing messages on, remembered (StaleHook) for
+// gl2d9 opening on it again. Whether there was room. (Under g_hookLock.)
+bool LeaveHooked(const StaleHook& entry) {
+    StaleHook* e = FindStale(entry.hwnd);
+    for (StaleHook& s : g_stale)
+        if (!e && (!s.hwnd || !IsWindow(s.hwnd))) e = &s;
+    if (!e) {
+        GL_LOG("window %p: left hooked, no room to remember it", static_cast<void*>(entry.hwnd));
+        return false;
     }
+    *e = entry;
+    return true;
+}
+
+// keep: left in the chain with what to put back (WindowClose from another thread; kRestore puts
+// it back, then unhooks). Whether it was left in the chain so.
+bool Unhook(const StaleHook* keep = nullptr) {
+    if (!g_w.hooked || !g_w.hwnd || !IsWindow(g_w.hwnd)) return false;
+    HookGuard guard;
     g_w.hooked = false;
+    const bool top = GetProc(g_w.hwnd, g_w.unicode) == reinterpret_cast<LONG_PTR>(HookProc);
+    // Something subclassed the window after gl2d9: it stays in the chain.
+    const bool kept = (keep || !top) && LeaveHooked(keep ? *keep : StaleHook{g_w.hwnd, g_w.orig, g_w.unicode});
+    if (!kept && top) SetProc(g_w.hwnd, g_w.unicode, reinterpret_cast<LONG_PTR>(g_w.orig));
+    return kept && keep;
+}
+
+// The window's frame: the style bits Cover and Windowed change. (Its state, minimized, maximized
+// or shown, is the window's own, kept: compared whole, a window minimized meanwhile looked
+// restyled by the game, and was left borderless.)
+const LONG kFrameBits = WS_POPUP | WS_OVERLAPPEDWINDOW | WS_DLGFRAME | WS_BORDER;
+const LONG kStateBits = WS_MINIMIZE | WS_MAXIMIZE | WS_VISIBLE;
+
+// The game's style, extended style and place put back on its window (Glide closed), its state
+// kept. Minimized, or the focus away (the game not in front, nothing in front counting, as in
+// the middle of the switch: a game closing Glide as it loses the focus): its place set as
+// where it comes back to (its normal position), minimized. Else placed behind the program in
+// front, if another's (above it, a game left in the background came in front of the program
+// switched to). (From another thread than the window's, the rare fallback of WindowClose:
+// the moves are asynchronous, the style changes wait for the window's thread.)
+void PutBack(HWND h, const StaleHook& r) {
+    const LONG state = GetWindowLongW(h, GWL_STYLE) & kStateBits;
+    SetWindowLongW(h, GWL_STYLE, (r.style & ~kStateBits) | state);
+    SetWindowLongW(h, GWL_EXSTYLE, r.exStyle);
+    const UINT async = OnWindowThread(h) ? 0 : SWP_ASYNCWINDOWPOS;
+    const bool topmost = (r.exStyle & WS_EX_TOPMOST) != 0;
+    const HWND band = topmost ? HWND_TOPMOST : HWND_NOTOPMOST;  // (covering, it was topmost)
+    if (IsIconic(h) || (r.away && !OursInFront())) {
+        WINDOWPLACEMENT wp = {};
+        wp.length = sizeof(wp);
+        GetWindowPlacement(h, &wp);
+        wp.rcNormalPosition = r.rect;
+        if (!(r.exStyle & WS_EX_TOOLWINDOW)) {
+            // (In workspace coordinates: the primary monitor's work area's origin is 0,0.)
+            MONITORINFO mi = {};
+            mi.cbSize = sizeof(mi);
+            const POINT origin = {0, 0};
+            GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi);
+            OffsetRect(&wp.rcNormalPosition, mi.rcMonitor.left - mi.rcWork.left, mi.rcMonitor.top - mi.rcWork.top);
+        }
+        wp.showCmd = SW_SHOWMINNOACTIVE;
+        wp.flags = 0;
+        SetWindowPlacement(h, &wp);
+        SetWindowPos(h, band, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_NOACTIVATE | async);
+        return;
+    }
+    // Behind another program in front (not a topmost one: behind it, a topmost window would stay
+    // in the topmost band; inserted after a window that isn't, it leaves it), in one move.
+    const HWND front = GetForegroundWindow();
+    const bool behind = !topmost && AnotherInFront() && front && !(GetWindowLongW(front, GWL_EXSTYLE) & WS_EX_TOPMOST);
+    SetWindowPos(h, behind ? front : band, r.rect.left, r.rect.top, r.rect.right - r.rect.left,
+                 r.rect.bottom - r.rect.top, SWP_FRAMECHANGED | SWP_NOACTIVATE | async);
+}
+
+// kRestore, on the window's own thread: the style the game had put back (if the window still
+// has gl2d9's), minimized if the focus is still away, and gl2d9's hook taken out of its chain
+// (unless something subclassed it since). Opened on again first: nothing (Hook took it).
+void RestoreClosed(HWND h) {
+    StaleHook r;
+    {
+        HookGuard guard;
+        StaleHook* e = FindStale(h);
+        if (!e || !e->restore) return;
+        r = *e;
+        e->restore = false;
+    }
+    // (Its frame, and, shown and covering, its place: a frameless game's window has gl2d9's
+    // frame anyway. Not in window mode: the player may have moved the window.)
+    RECT now = {};
+    const bool covering = !(r.ourStyle & WS_CAPTION);
+    const bool moved = covering && !IsIconic(h) && GetWindowRect(h, &now) && !EqualRect(&now, &r.ourRect);
+    if ((GetWindowLongW(h, GWL_STYLE) & kFrameBits) == (r.ourStyle & kFrameBits) && !moved)
+        PutBack(h, r);
+    else
+        GL_LOG("window %p: restyled or moved by the game since Glide closed: left as it is", static_cast<void*>(h));
+    HookGuard guard;
+    StaleHook* e = FindStale(h);
+    if (e && !e->restore && GetProc(h, e->unicode) == reinterpret_cast<LONG_PTR>(HookProc)) {
+        SetProc(h, e->unicode, reinterpret_cast<LONG_PTR>(e->orig));
+        *e = StaleHook{};
+    }
 }
 
 }  // namespace
@@ -567,8 +803,12 @@ HWND GameMainWindow() {
 
 bool WindowOpen(HWND requested) {
     WindowClose();
-    g_w = WindowState{};
+    {
+        HookGuard guard;  // (restyled and the style kept: the window's thread reads them)
+        g_w = WindowState{};
+    }
     g_w.display = g_config.display;
+    InterlockedExchange(&g_cursorAsked, 0);
     HWND h = requested && IsWindow(requested) ? requested : nullptr;
     if (!h) {
         h = GetActiveWindow();
@@ -596,11 +836,26 @@ bool WindowOpen(HWND requested) {
     g_board.ownWindow = g_w.own;
     if (!g_w.own) Hook();
     MonitorRect(h, g_w.device);
-    if (g_w.display == kDisplaySwitch) {
+    // Opened again with another program in front (switched away from, the game reopening Glide
+    // meanwhile: NFS 3 between its menus and a race): not covering the screen over that
+    // program, nor the display mode switched. Taken as the focus lost: done once the game has
+    // it (Activate). Not at the first open: a launcher's or the console's window may still be
+    // in front then.
+    static bool openedBefore;
+    if (openedBefore && !g_w.own && g_w.display != kDisplayWindow && AnotherInFront()) {
+        g_w.suspended = true;
+        GL_LOG("window: another program in front, the screen covered once the game has the focus");
+        // As with the focus lost (Activate): minimized, not topmost (it may still be as gl2d9
+        // left it, closed and opened again before its own thread put it back).
+        PlaceWindow(HWND_NOTOPMOST, RECT{}, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (!IsIconic(h)) ShowWindowAsync(h, SW_SHOWMINNOACTIVE);
+    }
+    openedBefore = true;
+    if (g_w.display == kDisplaySwitch && !g_w.suspended) {
         g_w.switched = SwitchMode();
         if (!g_w.switched) g_w.display = kDisplayBorderless;
     }
-    Show();
+    if (!g_w.suspended) Show();
     if (g_w.own) {
         ShowWindow(h, SW_SHOW);
         SetForegroundWindow(h);
@@ -608,19 +863,36 @@ bool WindowOpen(HWND requested) {
     return true;
 }
 
+// Opened with another program in front (WindowOpen), and the game in front by now (its focus
+// back before the board was open, which Activate ignored): covered now, on the window's thread.
+void WindowOpened() {
+    if (g_w.suspended && g_w.hooked && OursInFront() && ShowMsg()) PostMessageW(g_w.hwnd, ShowMsg(), kActivate, 0);
+}
+
 void WindowClose() {
     RestoreMode();
     if (!g_w.hwnd) return;
+    bool restyled;
+    StaleHook back;
+    {
+        HookGuard guard;
+        restyled = g_w.restyled;
+        back = StaleHook{g_w.hwnd,    g_w.orig,     g_w.unicode, true,           g_w.style,
+                         g_w.exStyle, g_w.ourStyle, g_w.rect,    g_w.ourRect,    g_w.suspended};
+    }
     if (g_w.own) {
         DestroyWindow(g_w.hwnd);
+    } else if (restyled && g_w.hooked && IsWindow(g_w.hwnd) && !OnWindowThread(g_w.hwnd) && ShowMsg() &&
+               Unhook(&back)) {
+        // From another thread: put back on the window's (kRestore), gl2d9's hook kept till then.
+        if (!PostMessageW(g_w.hwnd, ShowMsg(), kRestore, 0)) {
+            HookGuard guard;  // (a full queue: left as gl2d9 had it, rather than risk a hang)
+            if (StaleHook* e = FindStale(back.hwnd)) e->restore = false;
+        }
     } else {
         Unhook();
-        if (g_w.restyled && IsWindow(g_w.hwnd)) {
-            SetWindowLongW(g_w.hwnd, GWL_STYLE, g_w.style);
-            SetWindowLongW(g_w.hwnd, GWL_EXSTYLE, g_w.exStyle);
-            PlaceWindow((g_w.exStyle & WS_EX_TOPMOST) ? HWND_TOPMOST : HWND_NOTOPMOST, g_w.rect,
-                        SWP_FRAMECHANGED | SWP_NOACTIVATE);
-        }
+        // (Closed with the focus away, the game closing Glide as it loses it: kept minimized.)
+        if (restyled && IsWindow(g_w.hwnd)) PutBack(g_w.hwnd, back);
     }
     g_w.hwnd = nullptr;
     g_board.hwnd = nullptr;
@@ -628,19 +900,35 @@ void WindowClose() {
 }
 
 // The cursor hidden over the picture each frame too: a game that captures the mouse (Unreal)
-// gets no WM_SETCURSOR, and keeps the cursor its window class has. (The cursor is the
-// calling thread's: games draw from the thread of their window.)
+// gets no WM_SETCURSOR, and keeps the cursor its window class has. The cursor is set per
+// thread (its input): from a game drawing on another thread than its window's, SetCursor did
+// nothing (Unreal's arrow over the picture), so the window's thread is asked (kHideCursor).
 static void HideCursor() {
     HWND hwnd = g_w.hwnd;
-    if (!hwnd || g_w.suspended || !GetCursor()) return;
-    POINT p;
-    RECT rc;
-    if (GetCapture() != hwnd) {
+    if (!hwnd || g_w.suspended) return;
+    const DWORD windowThread = GetWindowThreadProcessId(hwnd, nullptr);
+    const bool own = windowThread == GetCurrentThreadId();
+    if (own) {
+        if (!GetCursor()) return;
+    } else {
+        CURSORINFO ci = {};
+        ci.cbSize = sizeof(ci);
+        if (!GetCursorInfo(&ci) || !(ci.flags & CURSOR_SHOWING) || !ci.hCursor) return;
+    }
+    GUITHREADINFO gti = {};
+    gti.cbSize = sizeof(gti);
+    const HWND capture = own ? GetCapture() : GetGUIThreadInfo(windowThread, &gti) ? gti.hwndCapture : nullptr;
+    if (capture != hwnd) {
+        POINT p;
+        RECT rc;
         if (!GetCursorPos(&p) || WindowFromPoint(p) != hwnd || !ScreenToClient(hwnd, &p) || !GetClientRect(hwnd, &rc) ||
             !PtInRect(&rc, p))
             return;
     }
-    SetCursor(nullptr);
+    if (own) SetCursor(nullptr);
+    else if (g_w.hooked && ShowMsg() && InterlockedExchange(&g_cursorAsked, 1) == 0 &&
+             !PostMessageW(hwnd, ShowMsg(), kHideCursor, 0))
+        InterlockedExchange(&g_cursorAsked, 0);
 }
 
 void WindowPump() {

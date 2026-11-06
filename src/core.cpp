@@ -235,6 +235,7 @@ FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refres
     }
     RenderSetGamma(1.3f);  // Glide's default (the Voodoo's own gamma table)
     g_board.open = true;
+    WindowOpened();
     return FXTRUE;
 }
 

@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.1.1
+Alt+Tab fixes (Need for Speed III), and a game drawing on its own thread no longer risks a
+hang on closing or keeps its cursor over the picture.
+
+- **Alt+Tab no longer bounces back into the game.** 1.1.0 minimized the window inside
+  `WM_ACTIVATEAPP`, which Windows sends in the middle of its own switch; the minimize
+  (`SW_MINIMIZE`, which activates the next window) made a second switch within it that gave
+  the game the focus back, its window minimized, the game holding the mouse. The window is
+  now minimized once the switch is done, without activating anything, and only if the focus
+  is still away by then.
+- **A game that takes the foreground as it paints stays away.** NFS III calls
+  `SetForegroundWindow` in its `WM_PAINT` while fullscreen, and switching away paints the
+  window: the desktop flashed and the game came back. While the focus is away gl2d9 now
+  answers `WM_PAINT` itself.
+- **No hang on closing, for a game drawing on another thread than its window's.** The
+  window's style was put back from the drawing thread with Glide's lock held, each change
+  waiting for the window's thread, which may have been waiting for the drawing thread. It is
+  now put back on the window's own thread; opened again before that, gl2d9 keeps the style
+  the game had.
+- **The cursor is hidden over the picture for such games too** (Unreal's arrow): the cursor
+  is set per thread, and the drawing thread's `SetCursor` did nothing; the window's thread is
+  asked.
+- **Reopened while another program is in front, the window waits.** A game opening Glide
+  again while switched away from (NFS III between its menus and a race) was covered in front
+  of the program in front, topmost; it now covers the screen (and switches the display mode)
+  once the game has the focus.
+- The log names what had the foreground at each focus change.
+- `tests/glide2/focus`: `paintfg` (takes the foreground in `WM_PAINT`, as NFS III) and
+  `reopen` (closes and opens Glide again from the drawing thread, then checks the window's
+  style and procedure).
+- Tidying: the export handlers written out (`catch (...) { ... }`), and left off the exports
+  that call nothing (stubs, constants, plain setters: nothing there can fail); the export
+  macros in `common.h`; `.clang-format` describes the code's style, and the code follows it.
+
 ## 1.1.0
 Recorders and overlays capture the game, Alt+Tab is reliable for games drawing on their own
 thread (Unreal), and fixes for stutter and device resets. The screenshot key is gone.

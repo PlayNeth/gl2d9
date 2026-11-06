@@ -14,7 +14,7 @@
 
 namespace gl2d9 {
 
-#define GL2D9_VERSION "1.1.0"
+#define GL2D9_VERSION "1.1.1"
 
 enum { kDisplaySwitch, kDisplayWindow, kDisplayBorderless };
 enum { kVSyncAuto, kVSyncOn, kVSyncOff };
@@ -89,11 +89,12 @@ T CallFailed(const char* where, T value) {
     CallFailed(where);
     return value;
 }
-// The handler of an export's function-try-block: GLAPI void grFoo() try { ... } GL_FAIL(), and
-// with the value returned on failure, GLAPI FxBool grBar() try { ... } GL_FAIL_RETURN(FXFALSE).
-#define GL_FAIL() \
-    catch (...) { ::gl2d9::CallFailed(__func__); }
-#define GL_FAIL_RETURN(value) \
-    catch (...) { return ::gl2d9::CallFailed(__func__, value); }
+// A Glide export: GLAPI FxBool grFoo(...) try { ENTRY("grFoo"); ... } catch (...) { return
+// CallFailed(__func__, FXFALSE); }. ENTRY takes gl2d9's lock for the call (released before the
+// handler runs, by unwinding) and traces it.
+#define GLAPI extern "C" __attribute__((stdcall))
+#define ENTRY(name)          \
+    ::gl2d9::Guard guard_;   \
+    GL_TRACE("%s", name)
 
 }  // namespace gl2d9

@@ -10,6 +10,7 @@ namespace gl2d9 {
 
 // Sets the window up for the screen (g_board.screenW x screenH); g_board.hwnd is the window.
 bool WindowOpen(HWND requested);
+void WindowOpened();  // after the board is open (see WindowOpen)
 void WindowClose();  // the window and the display as they were
 // Each frame (grBufferSwap): the cursor hidden over the picture, and the messages of gl2d9's
 // own window handled (the game doesn't pump any).
