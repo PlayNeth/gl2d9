@@ -135,7 +135,7 @@ A `[gl2d9]` section applies to every game, and a `[game.exe]` section overrides 
 | `stretch` | `aspect`, `fill`, `integer` |
 | `filter` | `linear`, `point`, `sharp` (sharp bilinear: flat pixels, blended over one screen pixel at their edges, at any scale) |
 | `scale` | `1`; up to `8`: the game's resolution drawn that many times larger on the GPU |
-| `vsync` | `auto` (the game decides, through `grBufferSwap`), `on`, `off` |
+| `vsync` | `auto` (the game decides, through `grBufferSwap`), `on`, `off`. Under Windows' desktop compositor gl2d9 paces the frames to the screen's refresh itself; elsewhere (Wine, no compositor) Direct3D 9's vsync does |
 | `voodoolook` | `off`; `on`: the picture dithered to 16 bits with the Voodoo's 4×4 dither |
 | `texfilter` | `game`; `linear`: point-filtered textures drawn bilinear (cut-outs keep theirs) |
 | `anisotropy` | `0` (off); `2`, `4`, `8` or `16`, on smoothly filtered textures (not on cut-outs) |

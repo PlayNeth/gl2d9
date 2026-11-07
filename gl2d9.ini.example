@@ -16,7 +16,8 @@ anisotropy=0
 voodoolook=0
 ; internal resolution multiplier (1-8): 2 renders 640x480 games at 1280x960
 scale=1
-; auto | on | off
+; auto | on | off (on Windows with the desktop compositor, gl2d9 waits for the refresh itself
+; rather than Direct3D 9: smoother, less CPU on some drivers; under Wine Direct3D 9 waits)
 vsync=auto
 ; texture memory per TMU (MB, up to 32, auto = 4 for Glide 2, 16 for Glide 3) and TMU count reported to the game
 tmumemory=auto

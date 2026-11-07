@@ -14,7 +14,7 @@
 
 namespace gl2d9 {
 
-#define GL2D9_VERSION "1.1.1"
+#define GL2D9_VERSION "1.1.2"
 
 enum { kDisplaySwitch, kDisplayWindow, kDisplayBorderless };
 enum { kVSyncAuto, kVSyncOn, kVSyncOff };
@@ -57,6 +57,12 @@ void LimitFrame();                     // fpslimit=: waits out the rest of the f
 void LimitSwapInterval(int interval);  // vsync=auto: grBufferSwap(2 or more), frames that many refreshes apart
 extern int g_logLevel;                 // (util.cpp) read at every log and trace site: inline
 inline int LogLevel() { return g_logLevel; }
+// Vsync under the desktop compositor (util.cpp): Present doesn't wait, gl2d9 paces the frames.
+// CompositorPaced: whether it does (asks the compositor each time, logs a change; false with
+// vsync=off and under Wine). PaceSwap: after a present, waits for the next frame's slot,
+// `slots` refreshes on (the thread that swaps, without the lock).
+bool CompositorPaced();
+void PaceSwap(int slots);
 void Log(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 void LogFlush(bool processExit);
 void CrashLoggerRemove();  // before the DLL is unloaded (FreeLibrary)

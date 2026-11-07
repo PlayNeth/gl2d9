@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.2
+Vsync paced by gl2d9 under Windows' desktop compositor (dd2d9 1.5.0's).
+
+- **Vsync under the desktop compositor: frames paced by gl2d9, Present doesn't wait.**
+  gl2d9 presents into a window, which Windows' compositor (DWM) shows at its next pass;
+  with vsync, Direct3D 9 made each Present wait for a vblank of its own, on the game's own
+  thread (`grBufferSwap`), and Intel's driver spins the CPU for it. With dd2d9, the same
+  wait made N.I.C.E. 2 choppy on a laptop's UHD 620: Present 7–8 ms a frame, the game's own
+  work slowed from 3–5 to 7–10 ms on the shared power budget, frames now and then a refresh
+  late; paced instead, every frame of 10 s one refresh apart. Where composition is on
+  (Windows 8 and later; Windows 7 with Aero) and `vsync` isn't `off`, Present no longer waits,
+  and the swap, once presented, waits for its slot on a schedule one refresh period apart
+  (the compositor's own period), as many slots as Direct3D 9's vsync and the swap-interval
+  wait gave (`vsync=on`: one; `auto`: the game's interval, at least one). A frame late by less
+  than a period doesn't move the next one; the schedule leans toward the compositor's
+  vblanks, an eighth of the way a slot. Without the compositor's clock while presenting at
+  once (Windows 7's composition turned off since), the display's rate gives the period. Not
+  under Wine nor without composition, nor where the device could only be made with the
+  default interval: Direct3D 9's vsync, as before. Asked again at each device, reset and
+  swap chain; the log says which (`vsync: frames paced by gl2d9 to the desktop compositor's
+  refresh`, or `vsync: Direct3D 9's`). Under Wine (Direct3D 9's vsync there) the test set's
+  pictures and output are 1.1.1's, but for those that differ from one run to the next anyway.
+
 ## 1.1.1
 Alt+Tab fixes (Need for Speed III), and a game drawing on its own thread no longer risks a
 hang on closing or keeps its cursor over the picture.

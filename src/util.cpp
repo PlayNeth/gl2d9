@@ -1,6 +1,8 @@
 // Logging and configuration.
 #include "common.h"
 
+#include <dwmapi.h>
+
 #include <algorithm>
 #include <cstdarg>
 #include <cstdint>
@@ -616,19 +618,11 @@ void LimitFrame() {
     next += period;
 }
 
-// vsync=auto and grBufferSwap(N), N 2 or more: frames N refreshes apart. The swap waits for
-// one refresh (D3DPRESENT_INTERVAL_ONE); the rest is waited here, from the display's rate
-// (asked again every few seconds: the game may switch modes). A frame later than that starts
-// the count again.
-void LimitSwapInterval(int interval) {
-    static int64_t next;
-    static LARGE_INTEGER freq;
+namespace {
+// The display's refresh rate, asked again every few seconds (the game may switch modes).
+// Called by the thread that swaps.
+DWORD DisplayHz() {
     static DWORD hz, hzAt;
-    if (interval < 2) {
-        next = 0;
-        return;
-    }
-    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
     const DWORD tick = GetTickCount();
     if (!hzAt || tick - hzAt > 5000) {
         DEVMODEW dm = {};
@@ -638,6 +632,23 @@ void LimitSwapInterval(int interval) {
                  : 60;
         hzAt = tick | 1;
     }
+    return hz;
+}
+}  // namespace
+
+// vsync=auto and grBufferSwap(N), N 2 or more: frames N refreshes apart. The swap waits for
+// one refresh (D3DPRESENT_INTERVAL_ONE); the rest is waited here, from the display's rate
+// (asked again every few seconds: the game may switch modes). A frame later than that starts
+// the count again.
+void LimitSwapInterval(int interval) {
+    static int64_t next;
+    static LARGE_INTEGER freq;
+    if (interval < 2) {
+        next = 0;
+        return;
+    }
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    const DWORD hz = DisplayHz();
     const int64_t period = freq.QuadPart * interval / hz;
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
@@ -645,6 +656,102 @@ void LimitSwapInterval(int interval) {
     if (!next || now.QuadPart > next + period) next = now.QuadPart;
     SleepUntilQpc(next - freq.QuadPart / (10 * int64_t(hz)));
     next += period;
+}
+
+// ---------------------------------------------------------------- vsync under the compositor
+// (dd2d9's, 1.5.0.) A windowed frame is shown at the desktop compositor's next pass whenever
+// it is presented, so the pacing that matters is one frame a refresh, which gl2d9 keeps
+// itself (PaceSwap): Direct3D 9's own windowed vsync makes Present wait for a vblank, and
+// Intel's driver spins the CPU for it (with dd2d9, N.I.C.E. 2 on a UHD 620: Present 7-8 ms a
+// frame, the game's own work slowed from 3-5 to 7-10 ms on the shared power budget, a frame
+// now and then a refresh late; presented at once and paced, all 600 frames of 10 s on time).
+// Here it is the game's own thread that Present held. Not under Wine, whose compositor isn't
+// Windows' (Present's vsync as before), nor without one.
+namespace {
+using DwmTimingFn = HRESULT(WINAPI*)(HWND, DWM_TIMING_INFO*);
+using DwmEnabledFn = HRESULT(WINAPI*)(BOOL*);
+struct Dwm {
+    DwmTimingFn timing = nullptr;
+    DwmEnabledFn enabled = nullptr;
+};
+const Dwm& DwmFunctions() {
+    static const Dwm dwm = [] {
+        Dwm r;
+        if (g_config.vsync == kVSyncOff) return r;
+        if (GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version")) return r;
+        wchar_t path[MAX_PATH];
+        const UINT n = GetSystemDirectoryW(path, MAX_PATH);
+        if (!n || n >= MAX_PATH - 12) return r;
+        lstrcatW(path, L"\\dwmapi.dll");
+        const HMODULE m = LoadLibraryW(path);
+        if (!m) return r;
+        r.enabled =
+            reinterpret_cast<DwmEnabledFn>(reinterpret_cast<void*>(GetProcAddress(m, "DwmIsCompositionEnabled")));
+        r.timing =
+            reinterpret_cast<DwmTimingFn>(reinterpret_cast<void*>(GetProcAddress(m, "DwmGetCompositionTimingInfo")));
+        if (!r.enabled || !r.timing) r = Dwm();
+        return r;
+    }();
+    return dwm;
+}
+
+// The compositor's clock: QueryPerformanceCounter's value at the last vblank, and the refresh
+// period in its units. False with vsync=off, under Wine, while composition is off, or when
+// the compositor won't tell.
+bool CompositorClock(int64_t* vblank, int64_t* period) {
+    const Dwm& dwm = DwmFunctions();
+    if (!dwm.timing) return false;
+    DWM_TIMING_INFO t = {};
+    t.cbSize = sizeof(t);
+    // (nullptr: the whole desktop's timing, as Windows 8.1 and later require; fails while
+    // composition is off)
+    if (FAILED(dwm.timing(nullptr, &t)) || !t.qpcRefreshPeriod || !t.qpcVBlank) return false;
+    *vblank = int64_t(t.qpcVBlank);
+    *period = int64_t(t.qpcRefreshPeriod);
+    return true;
+}
+}  // namespace
+
+bool CompositorPaced() {
+    if (g_config.vsync == kVSyncOff) return false;
+    const Dwm& dwm = DwmFunctions();
+    BOOL on = FALSE;
+    const bool paced = dwm.enabled && SUCCEEDED(dwm.enabled(&on)) && on;
+    static volatile LONG logged = -1;  // what the log said last (-1: nothing yet)
+    if (InterlockedExchange(&logged, paced) != LONG(paced))
+        GL_LOG(paced ? "vsync: frames paced by gl2d9 to the desktop compositor's refresh"
+                     : "vsync: Direct3D 9's (Wine, or no desktop compositor)");
+    return paced;
+}
+
+// Frames `slots` refresh periods apart, on a schedule as fpslimit's: a frame late by less
+// than a period doesn't move the next one (snapping to the vblank after it instead, as tried
+// in dd2d9 with DwmFlush, had N.I.C.E. 2 two or three refreshes a frame for good, the game's
+// timing catching up), and one later than that starts the schedule again. The schedule leans
+// toward the compositor's vblanks, an eighth of the way a slot: the game starts its frame at
+// one and its present is shown at the next, whatever the clocks' drift. Without the
+// compositor's clock (Windows 7's turned off since the device was made), the display's rate
+// gives the period, and nothing to lean to.
+void PaceSwap(int slots) {
+    static int64_t next;
+    static LARGE_INTEGER freq;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    for (int i = 0; i < slots; i++) {
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        int64_t vblank = 0, period = 0;
+        const bool clock = CompositorClock(&vblank, &period);
+        if (!clock) period = freq.QuadPart / DisplayHz();
+        int64_t due = next;
+        if (!due || now.QuadPart > due + period) due = now.QuadPart;  // the first, or a whole period late
+        if (clock) {
+            int64_t off = ((due - vblank) % period + period) % period;  // due is off past a vblank
+            if (off > period / 2) off -= period;                        // or -off before the next
+            due -= off / 8;
+        }
+        SleepUntilQpc(due);
+        next = due + period;
+    }
 }
 
 }  // namespace gl2d9

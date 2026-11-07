@@ -26,6 +26,9 @@ void RenderClear(FxU32 argb, FxU8 alpha, FxU16 depth);
 // grBufferSwap: the back buffer shown. False: nothing could be shown (minimized, the device
 // lost or being made again).
 bool RenderSwap(int interval);
+// Whether the device presents at once and gl2d9 paces the frames to the desktop compositor
+// (PaceSwap), not Direct3D 9's vsync. Lock held.
+bool RenderPacedByCompositor();
 void RenderFlush();  // draws what is batched (before the state or the texture memory changes)
 void RenderSetGamma(float gamma);
 // The window was moved, resized or activated: its picture redrawn.

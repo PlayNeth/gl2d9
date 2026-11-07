@@ -80,6 +80,7 @@ struct Renderer {
     HWND deviceWindow = nullptr;   // what the device is made on: the game's window, or helper
     HWND helper = nullptr;         // a window of gl2d9's (WindowMakeHelper), where one was needed
     bool defaultInterval = false;  // (a fallback: D3DPRESENT_INTERVAL_DEFAULT)
+    bool compositor = false;       // the last Params() presents at once, gl2d9 pacing (CompositorPaced)
     bool ex = false;               // a Direct3D 9Ex device (where Windows refused a 9 one)
     DWORD anisoLimit = 0;          // anisotropy= within what the GPU can (0: not known yet; 1: none)
     // What is presented: a back buffer the size of the game window's client area, shown whole
@@ -336,7 +337,11 @@ D3DPRESENT_PARAMETERS Params() {
     pp.BackBufferHeight = g_r.bbH;
     pp.BackBufferCount = 1;
     pp.hDeviceWindow = g_r.deviceWindow;
-    pp.PresentationInterval = g_config.vsync == kVSyncOff ? D3DPRESENT_INTERVAL_IMMEDIATE : D3DPRESENT_INTERVAL_ONE;
+    // Under the desktop compositor gl2d9 paces the frames itself (CompositorPaced, util.cpp):
+    // asked again at each device, reset and swap chain these parameters make.
+    g_r.compositor = CompositorPaced();
+    pp.PresentationInterval =
+        g_config.vsync == kVSyncOff || g_r.compositor ? D3DPRESENT_INTERVAL_IMMEDIATE : D3DPRESENT_INTERVAL_ONE;
     if (g_r.defaultInterval) pp.PresentationInterval = D3DPRESENT_INTERVAL_DEFAULT;
     return pp;
 }
@@ -1606,6 +1611,8 @@ bool Present() {
     return SUCCEEDED(hr);
 }
 }  // namespace
+
+bool RenderPacedByCompositor() { return g_r.dev && g_r.compositor && !g_r.defaultInterval; }
 
 bool RenderSwap(int interval) {
     (void)interval;

@@ -383,12 +383,18 @@ void CoreSwap(int interval) {
         EnterCriticalSection(&g_lock);
     };
     const int paced = g_config.vsync == kVSyncAuto ? interval : 1;
-    unlocked([paced] {
+    // Under the desktop compositor Present doesn't wait: the swap waits for its slot after
+    // presenting, as many refreshes as Direct3D 9's vsync and LimitSwapInterval waited (at
+    // least one, vsync=off aside: then not paced at all).
+    const bool compositor = RenderPacedByCompositor();
+    unlocked([paced, compositor] {
         LimitFrame();
-        LimitSwapInterval(paced);
+        if (!compositor) LimitSwapInterval(paced);
     });
     if (!g_board.open) return;  // (closed by another thread meanwhile)
     const bool shown = RenderSwap(interval);
+    // (Asked again: the swap may have made the device anew.)
+    if (shown && g_board.open && RenderPacedByCompositor()) unlocked([paced] { PaceSwap(std::max(paced, 1)); });
     WindowPump();
     // Nothing shown (minimized by Alt+Tab, the device lost): the swap didn't wait for the
     // display, so a refresh's time is waited instead, without the lock (else the game's loop
