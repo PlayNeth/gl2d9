@@ -1,37 +1,14 @@
 // The Voodoo's pixel pipeline as Direct3D 9 pixel shaders: the texture combine units of the
 // TMUs, the color and alpha combine units, chroma keying and fog, generated in HLSL from the
-// register bits that select them and compiled once per combination (d3dcompiler).
-#include "shader.h"
-
-#include <d3dcompiler.h>
+// register bits that select them and compiled once per combination (d3dcompiler,
+// shadercache.cpp).
+#include "shaderint.h"
 
 #include <string>
-#include <unordered_map>
 
 namespace gl2d9 {
 
 namespace {
-
-using CompileFn = HRESULT(WINAPI*)(const void*, SIZE_T, const char*, const D3D_SHADER_MACRO*, ID3DInclude*, const char*,
-                                   const char*, UINT, UINT, ID3DBlob**, ID3DBlob**);
-
-CompileFn Compiler() {
-    static const CompileFn fn = [] {
-        static const wchar_t* kNames[] = {L"d3dcompiler_47.dll", L"d3dcompiler_46.dll", L"d3dcompiler_43.dll",
-                                          L"d3dcompiler_42.dll"};
-        for (const wchar_t* n : kNames) {
-            if (HMODULE m = LoadLibraryW(n)) {
-                if (auto f = reinterpret_cast<CompileFn>(reinterpret_cast<void*>(GetProcAddress(m, "D3DCompile")))) {
-                    GL_LOG("shaders: compiled with %ls", n);
-                    return f;
-                }
-            }
-        }
-        GL_LOG("shaders: no d3dcompiler found: nothing can be drawn");
-        return CompileFn(nullptr);
-    }();
-    return fn;
-}
 
 // One combine unit (the color, alpha or texture ones share their structure): out =
 // (zero_other ? 0 : other) [- local if sub_clocal], times the factor (reversed unless
@@ -92,15 +69,26 @@ bool UsesLocal(FxU32 m) {
 
 // The alpha test and blending in the shader (BlendInShader): on c (float3) and a, the color
 // and alpha drawn, prefog (float3) the color before fog, and the target's pixel dstExpr.
-std::string BlendCode(FxU32 am, const char* dstExpr) {
-    std::string s;
-    // The alpha test (Direct3D's would test the blended alpha), on the 8-bit alpha.
+// The destination as blending reads it: the Voodoo has a destination alpha only with alpha
+// planes; without, its blending takes 0xFF (MAME's alpha_blend), not the target's alpha
+// channel, which isn't written then.
+std::string DstExpr(const char* sample, bool alphaBuffer) {
+    return alphaBuffer ? std::string(sample) : "float4(" + std::string(sample) + ".rgb, 1)";
+}
+
+// The alpha test on `alpha8`, the 8-bit alpha (0..255), against the reference (target.y).
+std::string AlphaTestCode(FxU32 am, const char* alpha8) {
     const FxU32 func = (am & SST_ALPHAFUNC) >> SST_ALPHAFUNC_SHIFT;
-    if (am & SST_ENALPHAFUNC) {
-        static const char* kCmp[] = {"false", "<", "==", "<=", ">", "!=", ">=", "true"};
-        if (func == 0) s += "  discard;\n";
-        else if (func != 7) s += std::string("  if (!(round(a * 255) ") + kCmp[func] + " target.y)) discard;\n";
-    }
+    static const char* kCmp[] = {"false", "<", "==", "<=", ">", "!=", ">=", "true"};
+    if (!(am & SST_ENALPHAFUNC) || func == 7) return {};
+    if (func == 0) return "  discard;\n";
+    return std::string("  if (!(") + alpha8 + " " + kCmp[func] + " target.y)) discard;\n";
+}
+
+std::string BlendCode(FxU32 am, const char* dstExpr) {
+    // The alpha test (Direct3D's would test the blended alpha), on the 8-bit alpha (a is one
+    // already: the triangles' ai / 255, the frame buffer writes' read from 8 bits).
+    std::string s = AlphaTestCode(am, "round(a * 255)");
     s += std::string("  float4 dst = ") + dstExpr + ";\n";
     auto factor = [](FxU32 f, bool src, bool alpha) -> std::string {
         const char* one = alpha ? "1" : "float3(1, 1, 1)";
@@ -128,7 +116,20 @@ std::string BlendCode(FxU32 am, const char* dstExpr) {
     return s;
 }
 
-namespace {
+// Fog on c: Afog*Cfog + (1-Afog)*color; MULT2 keeps the first term only, ADD2 the second.
+std::string FogCode(FxU32 f, const char* alpha, const char* z, const char* tableIndex) {
+    if (!(f & SST_ENFOGGING)) return std::string();
+    if (f & SST_FOG_CONSTANT) return "  c = saturate(c + fogColor.rgb);\n";
+    std::string s;
+    if (f & SST_FOG_ALPHA) s += std::string("  float fa = ") + alpha + ";\n";
+    else if (f & SST_FOG_Z) s += std::string("  float fa = ") + z + ";\n";
+    else s += std::string(tableIndex) + "  float fa = tex2D(fogTab, float2((idx + 0.5) / 64, 0.5)).a;\n";
+    if ((f & SST_FOGMULT) && !(f & SST_FOGADD)) s += "  c = fa * fogColor.rgb;\n";
+    else if ((f & SST_FOGADD) && !(f & SST_FOGMULT)) s += "  c = (1 - fa) * c;\n";
+    else if (f & SST_FOGMULT) s += "  c = 0;\n";
+    else s += "  c = lerp(c, fogColor.rgb, fa);\n";
+    return s;
+}
 
 std::string Generate(const ShaderKey& k) {
     const FxU32 p = k.colorPath;
@@ -146,7 +147,7 @@ std::string Generate(const ShaderKey& k) {
     s += "struct Out { float4 c : COLOR; float z : DEPTH; };\n";
     const bool depthOut = k.depthConst || k.depthOut;
     s += depthOut ? "Out" : "float4";
-    s += (k.stipple || k.blend) ? " main(In i, float2 vpos : VPOS)" : " main(In i)";
+    s += (k.stipple || (k.blend & SST_RGBDSTFACT)) ? " main(In i, float2 vpos : VPOS)" : " main(In i)";
     s += depthOut ? " {\n" : " : COLOR {\n";
     if (k.stipple) {
         // The pixel's bit of the stipple register (MAME's Voodoo: pattern bit (y & 3) * 8 +
@@ -186,9 +187,7 @@ std::string Generate(const ShaderKey& k) {
             const std::string T = std::to_string(t);
             const std::string st = t == 0 ? "i.st0" : "i.st1";
             s += "  float2 uv" + T + " = " + st + ".xy / " + st + ".z * texScale" + T + ".xy;\n";
-            if (UsesLocal(m) || ((m & SST_TC_MSELECT) >> SST_TC_MSELECT_SHIFT) >= 4 ||
-                ((m & SST_TCA_MSELECT) >> SST_TCA_MSELECT_SHIFT) >= 4)
-                s += "  float4 l" + T + " = tex2D(tex" + T + ", uv" + T + ");\n";
+            if (ShaderUsesTexture(k, t)) s += "  float4 l" + T + " = tex2D(tex" + T + ", uv" + T + ");\n";
             else s += "  float4 l" + T + " = 0;\n";
             // LOD (in levels of the 256-texel space) for the detail and LOD-fraction factors.
             s += "  float2 dx" + T + " = ddx(uv" + T + " * texScale" + T + ".zw), dy" + T + " = ddy(uv" + T +
@@ -241,36 +240,28 @@ std::string Generate(const ShaderKey& k) {
               p & SST_CC_SUB_CLOCAL, p & SST_CC_REVERSE_BLEND, p & SST_CC_ADD_CLOCAL, p & SST_CC_ADD_ALOCAL,
               p & SST_CC_INVERT_OUTPUT) +
          ";\n";
-    s += "  float a = " +
-         Unit("ao", "al", "al", caFactor((p & SST_CCA_MSELECT) >> SST_CCA_MSELECT_SHIFT), p & SST_CCA_ZERO_OTHER,
-              p & SST_CCA_SUB_CLOCAL, p & SST_CCA_REVERSE_BLEND, p & SST_CCA_ADD_CLOCAL, p & SST_CCA_ADD_ALOCAL,
-              p & SST_CCA_INVERT_OUTPUT) +
-         ";\n";
-    if (k.blend) s += "  float3 prefog = c;\n";
-    // Fog: Afog*Cfog + (1-Afog)*color; MULT2 keeps the first term only, ADD2 the second.
-    const FxU32 f = k.fogMode;
-    if (f & SST_ENFOGGING) {
-        if (f & SST_FOG_CONSTANT) {
-            s += "  c = saturate(c + fogColor.rgb);\n";
-        } else {
-            if (f & SST_FOG_ALPHA) s += "  float fa = it.a;\n";
-            else if (f & SST_FOG_Z) s += "  float fa = itz;\n";
-            else {
-                // The 64-entry table over w (Glide's guFogTableIndexToW: entry i at
-                // 2^(3+(i>>2)) / (8-(i&3))): w = 2^k * r, r in [1,2), index 4k + 8 - 8/r.
-                s += "  float w = 1 / max(i.misc.x, 1e-20);\n";
-                s += "  float k = floor(log2(max(w, 1)));\n";
-                s += "  float r = max(w, 1) / exp2(k);\n";
-                s += "  float idx = clamp(4 * k + 8 - 8 / r, 0, 63);\n";
-                s += "  float fa = tex2D(fogTab, float2((idx + 0.5) / 64, 0.5)).a;\n";
-            }
-            if ((f & SST_FOGMULT) && !(f & SST_FOGADD)) s += "  c = fa * fogColor.rgb;\n";
-            else if ((f & SST_FOGADD) && !(f & SST_FOGMULT)) s += "  c = (1 - fa) * c;\n";
-            else if (f & SST_FOGMULT) s += "  c = 0;\n";
-            else s += "  c = lerp(c, fogColor.rgb, fa);\n";
-        }
-    }
-    if (k.blend) s += BlendCode(k.blend, "tex2D(dstTex, (vpos + 0.5) * target.zw)");
+    // The Voodoo's combined alpha is an 8-bit integer, the fraction dropped and then inverted
+    // (MAME's CLAMPED_ARGB, then ~a): ai. The alpha test compares it with the reference as
+    // integers, here (Direct3D's compares a float with its own reference / 255: equality
+    // isn't exact); blending takes it as ai / 255.
+    s +=
+        "  float ai = floor(" +
+        Unit("ao", "al", "al", caFactor((p & SST_CCA_MSELECT) >> SST_CCA_MSELECT_SHIFT), p & SST_CCA_ZERO_OTHER,
+             p & SST_CCA_SUB_CLOCAL, p & SST_CCA_REVERSE_BLEND, p & SST_CCA_ADD_CLOCAL, p & SST_CCA_ADD_ALOCAL, false) +
+        " * 255 + 1e-3);\n";
+    if (p & SST_CCA_INVERT_OUTPUT) s += "  ai = 255 - ai;\n";
+    s += "  float a = ai / 255;\n";
+    const bool fullBlend = (k.blend & SST_RGBDSTFACT) != 0;  // (blended here: PREFOG_COLOR, BlendInShader)
+    if (!fullBlend && (k.blend & SST_ENALPHAFUNC)) s += AlphaTestCode(k.blend, "ai");
+    if (fullBlend) s += "  float3 prefog = c;\n";
+    // The 64-entry table over w (Glide's guFogTableIndexToW: entry i at 2^(3+(i>>2)) /
+    // (8-(i&3))): w = 2^k * r, r in [1,2), index 4k + 8 - 8/r.
+    s += FogCode(k.fogMode, "it.a", "itz",
+                 "  float w = 1 / max(i.misc.x, 1e-20);\n"
+                 "  float k = floor(log2(max(w, 1)));\n"
+                 "  float r = max(w, 1) / exp2(k);\n"
+                 "  float idx = clamp(4 * k + 8 - 8 / r, 0, 63);\n");
+    if (fullBlend) s += BlendCode(k.blend, DstExpr("tex2D(dstTex, (vpos + 0.5) * target.zw)", k.dstAlpha).c_str());
     if (k.depthConst) {
         s += "  Out o;\n  o.c = float4(c, a);\n  o.z = depthK.x;\n  return o;\n}\n";
     } else if (k.depthOut) {
@@ -299,142 +290,56 @@ std::string Generate(const ShaderKey& k) {
     return s;
 }
 
-struct KeyHash {
-    size_t operator()(const ShaderKey& k) const {
-        size_t h = k.colorPath;
-        h = h * 1000003u ^ k.fogMode;
-        h = h * 1000003u ^ (k.tmuMode[0] + 7 * k.tmuMode[1]);
-        h = h * 1000003u ^
-            (k.tmus | k.chromaKey << 4 | k.delta0 << 5 | k.stipple << 6 | k.depthConst << 8 | k.depthOut << 9);
-        h = h * 1000003u ^ k.blend;
-        return h;
-    }
-};
-
-std::unordered_map<ShaderKey, IDirect3DPixelShader9*, KeyHash> g_cache;
-
-// The disk cache: compiled shaders by a hash of their source (so a gl2d9 that generates other
-// source never takes the old ones), in records of hash, size, bytecode after a header.
-constexpr char kDiskMagic[8] = {'G', 'L', '2', 'D', '9', 'S', 'C', '1'};
-struct DiskCache {
-    bool loaded = false;
-    std::wstring path;
-    std::unordered_map<uint64_t, std::vector<DWORD>> code;
-};
-DiskCache g_disk;
-
-uint64_t SourceHash(const std::string& s) {
-    uint64_t h = 14695981039346656037ull;
-    for (unsigned char c : s) h = (h ^ c) * 1099511628211ull;
-    return h;
-}
-
-void LoadDiskCache() {
-    if (g_disk.loaded) return;
-    g_disk.loaded = true;
-    g_disk.path = ShaderCachePath();
-    if (g_disk.path.empty()) return;
-    HANDLE h = CreateFileW(g_disk.path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return;
-    LARGE_INTEGER size = {};
-    std::vector<char> data;
-    // (Shaders of older gl2d9s pile up in it: past 16 MB it starts over.)
-    if (GetFileSizeEx(h, &size) && size.QuadPart > 0 && size.QuadPart < (16 << 20)) {
-        data.resize(size_t(size.QuadPart));
-        DWORD got = 0;
-        if (!ReadFile(h, data.data(), DWORD(data.size()), &got, nullptr)) got = 0;
-        data.resize(got);
-    }
-    CloseHandle(h);
-    if (data.size() < sizeof(kDiskMagic) || memcmp(data.data(), kDiskMagic, sizeof(kDiskMagic)) != 0) {
-        // Another format (or empty): started over.
-        DeleteFileW(g_disk.path.c_str());
-        return;
-    }
-    size_t at = sizeof(kDiskMagic);
-    while (at + 12 <= data.size()) {  // (a record cut short by a crash ends the reading)
-        uint64_t hash;
-        uint32_t bytes;
-        memcpy(&hash, &data[at], 8);
-        memcpy(&bytes, &data[at + 8], 4);
-        if (!bytes || bytes % 4 || bytes > data.size() - at - 12) break;
-        std::vector<DWORD> code(bytes / 4);
-        memcpy(code.data(), &data[at + 12], bytes);
-        g_disk.code[hash] = std::move(code);  // (a later record of the same source wins)
-        at += 12 + bytes;
-    }
-    // A record cut short (a crash while writing it): cut off, so the records added after it
-    // can be read (they were lost behind it, compiled again each run).
-    if (at < data.size()) {
-        HANDLE w = CreateFileW(g_disk.path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                               FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (w != INVALID_HANDLE_VALUE) {
-            LARGE_INTEGER to;
-            to.QuadPart = LONGLONG(at);
-            if (SetFilePointerEx(w, to, nullptr, FILE_BEGIN)) SetEndOfFile(w);
-            CloseHandle(w);
-        }
-    }
-    GL_LOG("shaders: %u in the cache (%ls)", unsigned(g_disk.code.size()), g_disk.path.c_str());
-}
-
-void SaveToDisk(uint64_t hash, const void* code, uint32_t bytes) {
-    if (g_disk.path.empty()) return;
-    HANDLE h = CreateFileW(g_disk.path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
-                           FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return;
-    std::vector<char> rec;
-    LARGE_INTEGER size = {};
-    if (GetFileSizeEx(h, &size) && size.QuadPart == 0)
-        rec.insert(rec.end(), kDiskMagic, kDiskMagic + sizeof(kDiskMagic));
-    const size_t at = rec.size();
-    rec.resize(at + 12 + bytes);
-    memcpy(&rec[at], &hash, 8);
-    memcpy(&rec[at + 8], &bytes, 4);
-    memcpy(&rec[at + 12], code, bytes);
-    DWORD put = 0;
-    WriteFile(h, rec.data(), DWORD(rec.size()), &put, nullptr);
-    CloseHandle(h);
-}
-
-}  // namespace
-
 bool ShaderKey::operator==(const ShaderKey& o) const {
     return colorPath == o.colorPath && fogMode == o.fogMode && tmuMode[0] == o.tmuMode[0] &&
            tmuMode[1] == o.tmuMode[1] && tmus == o.tmus && chromaKey == o.chromaKey && delta0 == o.delta0 &&
-           stipple == o.stipple && blend == o.blend && depthConst == o.depthConst && depthOut == o.depthOut;
+           stipple == o.stipple && blend == o.blend && depthConst == o.depthConst && depthOut == o.depthOut &&
+           dstAlpha == o.dstAlpha;
 }
+
+namespace {
+// The depth the shader writes, the pixel's own (ShaderKey::depthOut).
+FxU8 DepthOutBits(const Regs& r) {
+    FxU8 bits = (r.fbzMode & SST_WBUFFER) ? DEPTH_W : DEPTH_Z;
+    if (r.fbzMode & SST_ENZBIAS) bits |= DEPTH_BIAS;  // (not by its value: one shader for all)
+    if (IsOverlay(r)) bits |= DEPTH_OVERLAY;
+    return bits;
+}
+}  // namespace
 
 // The bits that select the pipeline (the rest are drawn through render states and constants).
 ShaderKey MakeShaderKey(const GlideState& st, int numTmu) {
     ShaderKey k{};
     const Regs& r = st.r;
-    k.colorPath = r.fbzColorPath & (SST_RGBSELECT | SST_ASELECT | SST_LOCALSELECT | SST_ALOCALSELECT |
-                                    SST_LOCALSELECT_OVERRIDE_WITH_ATEX | 0x03FFFF00u | SST_ENTEXTUREMAP);
-    k.fogMode = r.fogMode & (SST_ENFOGGING | SST_FOGADD | SST_FOGMULT | SST_FOG_ALPHA | SST_FOG_Z | SST_FOG_CONSTANT);
+    k.colorPath = r.fbzColorPath & kColorPathKeyBits;
+    k.fogMode = r.fogMode & kFogModeKeyBits;
     k.chromaKey = (r.fbzMode & SST_ENCHROMAKEY) ? 1 : 0;
     k.delta0 = st.ccDelta0 ? 1 : 0;
     if (r.fbzMode & SST_ENSTIPPLE) k.stipple = (r.fbzMode & SST_ENSTIPPLEPATTERN) ? 1 : 2;
     const FxU32 zc = SST_ENDEPTHBUFFER | SST_ZCOMPARE_TO_ZACOLOR;
     k.depthConst = (r.fbzMode & zc) == zc ? 1 : 0;
-    if (!k.depthConst && (r.fbzMode & SST_ENDEPTHBUFFER)) {
-        k.depthOut = (r.fbzMode & SST_WBUFFER) ? DEPTH_W : DEPTH_Z;
-        if (r.fbzMode & SST_ENZBIAS) k.depthOut |= DEPTH_BIAS;  // (not by its value: one shader for all)
-        if (IsOverlay(r)) k.depthOut |= DEPTH_OVERLAY;
+    if (!k.depthConst && (r.fbzMode & SST_ENDEPTHBUFFER)) k.depthOut = DepthOutBits(r);
+    if (BlendInShader(r)) {
+        k.blend = r.alphaMode & kBlendKeyBits;
+        k.dstAlpha = (r.fbzMode & SST_ENALPHABUFFER) ? 1 : 0;
+    } else if ((r.alphaMode & SST_ENALPHAFUNC) && (r.alphaMode & SST_ALPHAFUNC) != SST_ALPHAFUNC) {
+        k.blend = r.alphaMode & (SST_ENALPHAFUNC | SST_ALPHAFUNC);  // the alpha test alone, in the shader
     }
-    if (BlendInShader(r))
-        k.blend = r.alphaMode &
-                  (SST_ENALPHAFUNC | SST_ALPHAFUNC | SST_RGBSRCFACT | SST_RGBDSTFACT | SST_ASRCFACT | SST_ADSTFACT);
     if (r.fbzColorPath & SST_ENTEXTUREMAP) {
-        const FxU32 m0 = r.tmu[0].textureMode & (SST_TCOMBINE | SST_TACOMBINE);
+        const FxU32 m0 = r.tmu[0].textureMode & kTmuModeKeyBits;
         k.tmuMode[0] = m0;
         k.tmus = 1;
         if (numTmu > 1 && UsesOther(m0)) {
-            k.tmuMode[1] = r.tmu[1].textureMode & (SST_TCOMBINE | SST_TACOMBINE);
+            k.tmuMode[1] = r.tmu[1].textureMode & kTmuModeKeyBits;
             k.tmus = 2;
         }
     }
+    return k;
+}
+
+ShaderKey DepthWriteKey(ShaderKey k, const Regs& r) {
+    k.depthConst = 0;
+    k.depthOut = DepthOutBits(r);
     return k;
 }
 
@@ -459,81 +364,7 @@ bool BlendInShader(const Regs& r) {
            (r.fogMode & SST_ENFOGGING);
 }
 
-bool ShaderUsesTexture(const ShaderKey& k, int tmu) {
-    if (tmu >= k.tmus) return false;
-    const FxU32 m = k.tmuMode[tmu];
-    return UsesLocal(m) || ((m & SST_TC_MSELECT) >> SST_TC_MSELECT_SHIFT) >= 4 ||
-           ((m & SST_TCA_MSELECT) >> SST_TCA_MSELECT_SHIFT) >= 4;
-}
-
-namespace {
-// Bytecode for HLSL source: from the disk cache, or compiled (and added to it). Errors logged.
-bool Bytecode(const std::string& src, UINT flags, std::vector<DWORD>* out, bool* fromDisk = nullptr) {
-    LoadDiskCache();
-    const uint64_t hash = SourceHash(src);
-    auto cached = g_disk.code.find(hash);
-    if (fromDisk) *fromDisk = cached != g_disk.code.end();
-    if (cached != g_disk.code.end()) {
-        *out = cached->second;
-        return true;
-    }
-    CompileFn compile = Compiler();
-    if (!compile) return false;
-    ID3DBlob* code = nullptr;
-    ID3DBlob* errors = nullptr;
-    const HRESULT hr =
-        compile(src.data(), src.size(), "gl2d9", nullptr, nullptr, "main", "ps_3_0", flags, 0, &code, &errors);
-    const bool ok = SUCCEEDED(hr) && code;
-    if (ok) {
-        const DWORD* words = static_cast<const DWORD*>(code->GetBufferPointer());
-        out->assign(words, words + code->GetBufferSize() / 4);
-        g_disk.code[hash] = *out;
-        SaveToDisk(hash, words, uint32_t(code->GetBufferSize()));
-    } else {
-        GL_LOG("shader compile failed (0x%08lx): %s\n%s", static_cast<unsigned long>(hr),
-               errors ? static_cast<const char*>(errors->GetBufferPointer()) : "", src.c_str());
-    }
-    if (code) code->Release();
-    if (errors) errors->Release();
-    return ok;
-}
-
-IDirect3DPixelShader9* MakeShader(IDirect3DDevice9* dev, const std::string& src, UINT flags) {
-    std::vector<DWORD> code;
-    IDirect3DPixelShader9* ps = nullptr;
-    bool fromDisk = false;
-    if (Bytecode(src, flags, &code, &fromDisk) && FAILED(dev->CreatePixelShader(code.data(), &ps))) {
-        ps = nullptr;
-        // Refused from the disk cache (a record damaged on disk): compiled again, once, and
-        // the new one added (else that shader was missing every run from then on).
-        if (fromDisk) {
-            GL_LOG("shaders: a cached shader refused: compiled again");
-            g_disk.code.erase(SourceHash(src));
-            if (Bytecode(src, flags, &code) && FAILED(dev->CreatePixelShader(code.data(), &ps))) ps = nullptr;
-        }
-    }
-    return ps;
-}
-}  // namespace
-
-IDirect3DPixelShader9* GetShader(IDirect3DDevice9* dev, const ShaderKey& k) {
-    auto it = g_cache.find(k);
-    if (it != g_cache.end()) return it->second;
-    IDirect3DPixelShader9* ps = MakeShader(dev, Generate(k), D3DCOMPILE_OPTIMIZATION_LEVEL3);
-    GL_TRACE("shader %08lx %08lx %08lx %08lx tmus %d: %s", static_cast<unsigned long>(k.colorPath),
-             static_cast<unsigned long>(k.fogMode), static_cast<unsigned long>(k.tmuMode[0]),
-             static_cast<unsigned long>(k.tmuMode[1]), k.tmus, ps ? "made" : "failed");
-    g_cache[k] = ps;  // (a failed one stays null: not compiled again)
-    return ps;
-}
-
-void ReleaseShaders() {
-    for (auto& e : g_cache)
-        if (e.second) e.second->Release();
-    g_cache.clear();
-}
-
-// A fixed shader (the presentation passes, the LFB's), through the same cache.
-IDirect3DPixelShader9* CompileFixed(IDirect3DDevice9* dev, const char* src) { return MakeShader(dev, src, 0); }
+// (The detail and LOD fraction factors need only the coordinates' derivatives, not the texel.)
+bool ShaderUsesTexture(const ShaderKey& k, int tmu) { return tmu < k.tmus && UsesLocal(k.tmuMode[tmu]); }
 
 }  // namespace gl2d9

@@ -64,7 +64,7 @@ Set `log=1` in `gl2d9.ini` and start the game. `gl2d9.log` appears next to the g
 
 ### The Voodoo, emulated
 
-- **The pixel pipeline as generated pixel shaders:** color and alpha combine, texture combine on two TMUs, fog (table, iterated alpha, Z or W), chroma key, alpha test and blending, including `PREFOG_COLOR`, which Direct3D 9 can't express. One shader per combination of states, cached on disk (`gl2d9.shaders`), so a game doesn't stutter compiling them the next time.
+- **The pixel pipeline as generated pixel shaders:** color and alpha combine, texture combine on two TMUs, fog (table, iterated alpha, Z or W), chroma key, alpha test and blending, including `PREFOG_COLOR`, which Direct3D 9 can't express. One shader per combination of states, cached on disk (`gl2d9.shaders`) and made from it as the game loads, so a game doesn't stutter compiling them the next time.
 - **Depth as the Voodoo stored it:** the shader writes the 16-bit value the chip would, Z's integer part or W in the Voodoo's floating format, with the depth bias in the chip's own units. Coplanar passes tie the way they did on the card.
 - **Texture memory emulated byte for byte:** downloads go into each TMU's memory as on the card. Textures are decoded from it when drawn (SSE2 for the 16-bit formats) and cached until the bytes under them change: every format, NCC tables, palettes, multibase and split (two-TMU trilinear) textures, mirroring.
 - **The linear frame buffer both ways:** reads come from the GPU at the game's resolution and are reused while nothing has been drawn. Writes take every format (565, 555, 1555, 888, 8888, depth and alpha), directly or through the pixel pipeline, and RLE16 region writes.
@@ -90,7 +90,7 @@ Set `log=1` in `gl2d9.ini` and start the game. `gl2d9.log` appears next to the g
 
 - **Where Windows refuses a Direct3D 9 device** (a game with Windows' own DirectDraw loaded, NFS4), gl2d9 tries its own window, a smaller back buffer and then Direct3D 9Ex, and logs a diagnosis if all fail.
 - **Texture memory sized for the game:** 4 MB per TMU for Glide 2 (a Voodoo2), 16 MB for Glide 3. NFS III crashed once 4 MB filled.
-- **Unreal-engine resolution lists** (`GlideDrv.dll`) are trimmed to the modes the monitor has.
+- **Unreal-engine resolution lists** (`GlideDrv.dll`) are trimmed to the modes the monitor has, with `display=switch`.
 - **The mouse cursor is hidden over the picture,** also for games that capture the mouse.
 - **A crash in the game** is logged with its location and stack (`log=1`).
 
@@ -135,7 +135,7 @@ A `[gl2d9]` section applies to every game, and a `[game.exe]` section overrides 
 | `stretch` | `aspect`, `fill`, `integer` |
 | `filter` | `linear`, `point`, `sharp` (sharp bilinear: flat pixels, blended over one screen pixel at their edges, at any scale) |
 | `scale` | `1`; up to `8`: the game's resolution drawn that many times larger on the GPU |
-| `vsync` | `auto` (the game decides, through `grBufferSwap`), `on`, `off`. Under Windows' desktop compositor gl2d9 paces the frames to the screen's refresh itself; elsewhere (Wine, no compositor) Direct3D 9's vsync does |
+| `vsync` | `auto` (the game decides, through `grBufferSwap`: 0 presents at once, as the Voodoo did; 1 and more wait for the display's refresh), `on`, `off`. Under Windows' desktop compositor gl2d9 paces the frames to the screen's refresh itself; elsewhere (Wine, no compositor) Direct3D 9's vsync does |
 | `voodoolook` | `off`; `on`: the picture dithered to 16 bits with the Voodoo's 4×4 dither |
 | `texfilter` | `game`; `linear`: point-filtered textures drawn bilinear (cut-outs keep theirs) |
 | `anisotropy` | `0` (off); `2`, `4`, `8` or `16`, on smoothly filtered textures (not on cut-outs) |
@@ -145,7 +145,7 @@ A `[gl2d9]` section applies to every game, and a `[game.exe]` section overrides 
 | `fbmemory` | `4`; `1`–`16`: frame buffer memory reported, MB |
 | `fpslimit` | `0` (off); frames per second at most, paced at the buffer swap |
 | `cpus` | `1`: the game runs on one processor; `0`: all |
-| `filterresolutions` | `on`: Unreal-engine resolution lists trimmed to the monitor's modes; `off` |
+| `filterresolutions` | `on`: with `display=switch`, Unreal-engine resolution lists trimmed to the monitor's modes (scaled, every mode works and the list is left as it is); `off` |
 | `shadercache` | `on`: compiled shaders kept in `gl2d9.shaders` next to the DLL; `off` |
 | `d3d9` | `system` (Windows' own `d3d9.dll`), `game` (the one in the game's folder, such as DXVK's) |
 | `log` | `0`; `1` (info: settings, device, errors, a crash's location); `2` (every Glide call: slow) |
@@ -170,7 +170,7 @@ A `[gl2d9]` section applies to every game, and a `[game.exe]` section overrides 
 - **The game runs too fast, or its timing is off:** keep `cpus=1`, or set `fpslimit`.
 - **Hatched light maps, headlights or decals on the road:** raise `overlaybias`.
 - **The game crashes once it has loaded many textures:** check `tmumemory`; `auto` gives Glide 2 games a Voodoo2's 4 MB per TMU.
-- **An Unreal-engine game offers resolutions the monitor can't show:** keep `filterresolutions=on`.
+- **An Unreal-engine game offers resolutions the monitor can't show** (`display=switch`): keep `filterresolutions=on`, or use `display=borderless`, where every resolution works scaled.
 - **Recordings come out black or cut off:** use OBS's Game Capture (or Window Capture with the Windows 10 capture method) on the game's window; gl2d9 1.1.0 and later present it as any windowed Direct3D 9 game does.
 - **An Unreal-engine game stutters:** try `cpus=0` in a section for its exe (`[UnrealTournament.exe]`): with `cpus=1` its threads, and a recorder's, share one processor.
 - **Something else:** set `log=1` (or `2` for every Glide call) and please report the problem with `gl2d9.log`.
@@ -194,8 +194,8 @@ The output is `build/glide.dll`, `build/glide2x.dll` and `build/glide3x.dll`, st
 
 | Path | What |
 |---|---|
-| `src/` | The DLLs. `api2.cpp` and `api3.cpp` (the Glide 2.x / 2.1 and Glide 3 entry points), `core.cpp` (what both share: opening the screen, drawing, clearing and swapping, the hardware as reported, anti-aliasing), `state.cpp` and `voodoo.h` (Glide's state as the Voodoo's registers), `render.cpp` and `shader.cpp` (drawing through Direct3D 9, the generated pixel shaders), `texmem.cpp` (texture memory and decoding), `lfb.cpp` (the linear frame buffer), `gu.cpp` (the `gu` utility library), `window.cpp` (the window the picture is shown in), `util.cpp` (config and logging). |
-| `tests/` | Small Glide programs with known right results: frame buffer, depth, W buffer, overlays, anti-aliasing, multipass, PREFOG, stipple, mirroring. See [`tests/README.md`](tests/README.md). |
+| `src/` | The DLLs. `api2.cpp` and `api3.cpp` (the Glide 2.x / 2.1 and Glide 3 entry points), `api_common.cpp` (the entry points both have alike), `core.cpp` (what both share: opening the screen, drawing, clearing and swapping, the hardware as reported), `aa.cpp` (anti-aliasing), `state.cpp` and `voodoo.h` (Glide's state as the Voodoo's registers), `render.cpp` (the Direct3D 9 device) with `targets.cpp`, `rendertex.cpp`, `renderstate.cpp`, `draw.cpp`, `stipple.cpp`, `present.cpp` and `renderlfb.cpp` (render targets, texture cache, device state, drawing, stipple rotate mode, presenting, frame buffer reads and writes), `shader.cpp` and `shadercache.cpp` (the generated pixel shaders, compiled and cached), `texmem.cpp` (texture memory and decoding), `lfb.cpp` (the linear frame buffer), `gu.cpp`, `gu3df.cpp`, `gutex.cpp` and `gump.cpp` (the `gu` utility library: fog tables and combines, `.3df` files, the texture manager, multipass), `window.cpp`, `hook.cpp` and `display.cpp` (the window the picture is shown in, gl2d9's procedure in its chain, monitors and display modes), `util.cpp` (config and logging). |
+| `tests/` | Small Glide programs with known right results: frame buffer, depth, W buffer, compare-to-bias depth, destination alpha, overlays, anti-aliasing, multipass, PREFOG, stipple, mirroring. See [`tests/README.md`](tests/README.md). |
 
 ### Tests
 
@@ -205,4 +205,4 @@ The output is `build/glide.dll`, `build/glide2x.dll` and `build/glide3x.dll`, st
 
 ## License
 
-gl2d9 is under the MIT license, see [`LICENSE`](LICENSE), except the parts derived from 3dfx's open-sourced Glide source code: `src/gu.cpp`, `src/gu.h`, `src/glidedefs.h` and the antialiasing in `src/core.cpp`, which are under the 3DFX GLIDE Source Code General Public License, see [`LICENSE-3DFX`](LICENSE-3DFX). Each of those files says so in its header. The complete source code of every released DLL is in this repository. Glide is a trademark of its owner; gl2d9 is not affiliated with or endorsed by 3dfx Interactive or its successors.
+gl2d9 is under the MIT license, see [`LICENSE`](LICENSE), except the parts derived from 3dfx's open-sourced Glide source code: `src/gu.cpp`, `src/gu3df.cpp`, `src/gutex.cpp`, `src/gump.cpp`, `src/gu.h`, `src/glidedefs.h` and the antialiasing in `src/aa.cpp`, which are under the 3DFX GLIDE Source Code General Public License, see [`LICENSE-3DFX`](LICENSE-3DFX). Each of those files says so in its header. The complete source code of every released DLL is in this repository. Glide is a trademark of its owner; gl2d9 is not affiliated with or endorsed by 3dfx Interactive or its successors.

@@ -20,6 +20,8 @@ void WindowPump();
 // from its rendering thread). Destroyed by the same thread.
 HWND WindowMakeHelper();
 void WindowDestroyHelper(HWND h);
+// The DLL unloaded while the process goes on (FreeLibrary): gl2d9's window classes unregistered.
+void WindowUnload();
 // The client area the window has, or is about to have once covered or made a window (that
 // may be done on its own thread a moment later): the size to present at.
 SIZE WindowClientSize();

@@ -43,6 +43,17 @@ const Offsets& Off() {
 
 inline int ClampLod(int lod) { return lod < 0 ? 0 : lod > 8 ? 8 : lod; }
 
+// The table DecodeLevel last decoded through (the renderer decodes a texture's levels one after
+// the other): built once a texture instead of once a level, which for small textures cost more
+// than decoding them (NCC's especially). A table download that changes something drops it.
+struct LutCache {
+    int format = -1;  // (-1: none)
+    GrChipID_t tmu = 0;
+    int nccTable = 0;
+    FxU32 lut[256];
+};
+LutCache g_lut;
+
 }  // namespace
 
 FxU32 MipMapSize(int aspectClass, int lod) { return kMipMapSize[aspectClass & 3][ClampLod(lod)]; }
@@ -125,14 +136,18 @@ void DownloadLevel(GrChipID_t tmu, FxU32 startAddress, GrLOD_t thisLod, GrLOD_t 
     if (!(evenOdd & ((thisLod & 1) ? GR_MIPMAPLEVELMASK_ODD : GR_MIPMAPLEVELMASK_EVEN))) return;
     int w, h;
     LevelSize(thisLod, aspect, &w, &h);
-    if (t < 0) t = 0;
+    const int bpp = format >= GR_TEXFMT_16BIT ? 2 : 1;
+    const size_t rowBytes = size_t(w) * bpp;
+    if (t < 0) {  // (the data's first row is row t: the rows above the level are skipped)
+        if (maxT < 0) return;
+        data = static_cast<const FxU8*>(data) + size_t(-t) * rowBytes;
+        t = 0;
+    }
     if (maxT >= h) maxT = h - 1;
     if (t > maxT) return;
-    const int bpp = format >= GR_TEXFMT_16BIT ? 2 : 1;
     const FxU32 base = TexCalcBaseAddress(startAddress, largeLod, aspect, format, evenOdd) & ~7u;
     const FxU32 addr = LevelAddress(base, thisLod, aspect, format, evenOdd != GR_MIPMAPLEVELMASK_BOTH);
     TexMemory& m = g_texMem[tmu];
-    const size_t rowBytes = size_t(w) * bpp;
     const size_t start = size_t(addr) + size_t(t) * rowBytes;
     const size_t len = size_t(maxT - t + 1) * rowBytes;
     if (start >= m.bytes.size()) return;
@@ -162,22 +177,30 @@ void DownloadNcc(GrChipID_t tmu, int which, const GuNccTable* table) {
     const unsigned hash = Hash(table->packed_data, sizeof(table->packed_data));
     if (hash == g_board.nccHash[0][which] && memcmp(&g_board.ncc[0][which], table, sizeof(*table)) == 0) return;
     RenderTexturesChanged();
+    g_lut.format = -1;
     for (int t = 0; t < g_board.numTmu; t++) {
         g_board.ncc[t][which] = *table;
         g_board.nccHash[t][which] = hash;
     }
 }
 
-void DownloadPalette(GrChipID_t tmu, const FxU32* entries, int start, int end) {
+void DownloadPalette(GrChipID_t tmu, const FxU32* entries, int start, int end, bool six) {
     if (tmu < 0 || tmu >= g_board.numTmu || !entries) return;
     if (start < 0) start = 0;
     if (end > 255) end = 255;
+    // The palette registers hold 24 bits: RGB 888, or A, R, G and B in 6 bits each (3dfx's
+    // _grTexDownloadPalette packs the ARGB 8888 entries so for a 6666 table).
+    auto entry = [six](FxU32 e) {
+        return six ? (e >> 26) << 18 | ((e >> 18) & 0x3F) << 12 | ((e >> 10) & 0x3F) << 6 | ((e >> 2) & 0x3F)
+                   : e & 0xFFFFFF;
+    };
     bool same = true;
-    for (int i = start; i <= end && same; i++) same = g_board.palette[0][i] == (entries[i] & 0xFFFFFF);
+    for (int i = start; i <= end && same; i++) same = g_board.palette[0][i] == entry(entries[i]);
     if (same) return;
     RenderTexturesChanged();
+    g_lut.format = -1;
     // Every TMU gets it (the TMUs' palettes are always the same): hashed once, copied.
-    for (int i = start; i <= end; i++) g_board.palette[0][i] = entries[i] & 0xFFFFFF;
+    for (int i = start; i <= end; i++) g_board.palette[0][i] = entry(entries[i]);
     g_board.paletteHash[0] = Hash(g_board.palette[0], sizeof(g_board.palette[0]));
     for (int t = 1; t < g_board.numTmu; t++) {
         memcpy(g_board.palette[t], g_board.palette[0], sizeof(g_board.palette[0]));
@@ -191,12 +214,9 @@ namespace {
 
 inline FxU32 Expand(FxU32 v, int bits) {  // n-bit channel to 8 bits, the top bits repeated
     switch (bits) {
-    case 1: return v ? 0xFF : 0;
     case 2: return v * 0x55;
     case 3: return (v << 5) | (v << 2) | (v >> 1);
     case 4: return v * 0x11;
-    case 5: return (v << 3) | (v >> 2);
-    case 6: return (v << 2) | (v >> 4);
     default: return v;
     }
 }
@@ -242,17 +262,20 @@ static inline FxU32 Texel(int format, FxU32 v, const FxU32* pal, const Ncc* ncc)
         return a << 24 | i << 16 | i << 8 | i;
     }
     case GR_TEXFMT_P_8: return 0xFF000000u | pal[v & 0xFF];
+    case GR_TEXFMT_P_8_6666: {  // the palette entry as A, R, G, B of 6 bits (MAME's argbexpand<6,6,6,6>)
+        const FxU32 p = pal[v & 0xFF];
+        auto x6 = [p](int at) {
+            const FxU32 c = (p >> at) & 0x3F;
+            return c << 2 | c >> 4;
+        };
+        return x6(18) << 24 | x6(12) << 16 | x6(6) << 8 | x6(0);
+    }
     case GR_TEXFMT_ARGB_8332:
         return (v >> 8) << 24 | Expand((v >> 5) & 7, 3) << 16 | Expand((v >> 2) & 7, 3) << 8 | Expand(v & 3, 2);
     case GR_TEXFMT_AYIQ_8422: return (v >> 8) << 24 | (ncc ? ncc->Rgb(v & 0xFF) : 0);
-    case GR_TEXFMT_RGB_565:
-        return 0xFF000000u | Expand(v >> 11, 5) << 16 | Expand((v >> 5) & 63, 6) << 8 | Expand(v & 31, 5);
-    case GR_TEXFMT_ARGB_1555:
-        return (v & 0x8000 ? 0xFF000000u : 0) | Expand((v >> 10) & 31, 5) << 16 | Expand((v >> 5) & 31, 5) << 8 |
-               Expand(v & 31, 5);
-    case GR_TEXFMT_ARGB_4444:
-        return Expand(v >> 12, 4) << 24 | Expand((v >> 8) & 15, 4) << 16 | Expand((v >> 4) & 15, 4) << 8 |
-               Expand(v & 15, 4);
+    case GR_TEXFMT_RGB_565: return pix::Scalar565(v);
+    case GR_TEXFMT_ARGB_1555: return pix::Scalar1555(v);
+    case GR_TEXFMT_ARGB_4444: return pix::Scalar4444(v);
     case GR_TEXFMT_ALPHA_INTENSITY_88: {
         const FxU32 i = v & 0xFF;
         return (v >> 8) << 24 | i << 16 | i << 8 | i;
@@ -277,7 +300,8 @@ bool DescribeTexture(GrChipID_t tmu, const TmuRegs& r, TexDesc* d) {
     d->tsplit = (tl & SST_LOD_TSPLIT) != 0;
     d->odd = (tl & SST_LOD_ODD) != 0;
     d->nccTable = (r.textureMode & SST_TNCCSELECT) ? 1 : 0;
-    if (d->format == GR_TEXFMT_P_8 || d->format == GR_TEXFMT_AP_88) d->tableHash = g_board.paletteHash[tmu];
+    if (d->format == GR_TEXFMT_P_8 || d->format == GR_TEXFMT_P_8_6666 || d->format == GR_TEXFMT_AP_88)
+        d->tableHash = g_board.paletteHash[tmu];
     else if (d->format == GR_TEXFMT_YIQ_422 || d->format == GR_TEXFMT_AYIQ_8422)
         d->tableHash = g_board.nccHash[tmu][d->nccTable] ^ FxU32(d->nccTable);
     else d->tableHash = 0;
@@ -333,6 +357,18 @@ void TexelTable(int format, const FxU32* pal, const Ncc* ncc, FxU32* lut) {
         }
     }
 }
+
+// The table a texture of a table format is decoded through, from the cache where it can be.
+const FxU32* Lut(const TexDesc& d) {
+    if (g_lut.format == d.format && g_lut.tmu == d.tmu && g_lut.nccTable == d.nccTable) return g_lut.lut;
+    std::optional<Ncc> ncc;
+    if (d.format == GR_TEXFMT_YIQ_422 || d.format == GR_TEXFMT_AYIQ_8422) ncc.emplace(g_board.ncc[d.tmu][d.nccTable]);
+    TexelTable(d.format, g_board.palette[d.tmu], ncc ? &*ncc : nullptr, g_lut.lut);
+    g_lut.format = d.format;
+    g_lut.tmu = d.tmu;
+    g_lut.nccTable = d.nccTable;
+    return g_lut.lut;
+}
 }  // namespace
 
 void DecodeLevel(const TexDesc& d, int lod, FxU32* out, int outPitch) {
@@ -341,17 +377,11 @@ void DecodeLevel(const TexDesc& d, int lod, FxU32* out, int outPitch) {
     const TexMemory& m = g_texMem[d.tmu];
     const int bpp = d.format >= GR_TEXFMT_16BIT ? 2 : 1;
     const FxU32 addr = DescLevelAddress(d, lod);
-    const FxU32* pal = g_board.palette[d.tmu];
-    const bool nccFmt = d.format == GR_TEXFMT_YIQ_422 || d.format == GR_TEXFMT_AYIQ_8422;
-    std::optional<Ncc> nccTable;
-    if (nccFmt) nccTable.emplace(g_board.ncc[d.tmu][d.nccTable]);
-    const Ncc* ncc = nccTable ? &*nccTable : nullptr;
     // The 16-bit RGB formats converted directly (SSE2); the rest through a table of their 256
     // colors (the low byte's, alpha the high byte, for the 16-bit ones).
     const bool direct =
         d.format == GR_TEXFMT_RGB_565 || d.format == GR_TEXFMT_ARGB_1555 || d.format == GR_TEXFMT_ARGB_4444;
-    FxU32 lut[256];
-    if (!direct) TexelTable(d.format, pal, ncc, lut);
+    const FxU32* const lut = direct ? nullptr : Lut(d);
     const size_t size = m.bytes.size();
     for (int y = 0; y < h; y++) {
         FxU32* row = out + size_t(y) * outPitch;
@@ -363,7 +393,8 @@ void DecodeLevel(const TexDesc& d, int lod, FxU32* out, int outPitch) {
                 const size_t at = a + size_t(x) * bpp;
                 FxU32 v = 0;
                 if (at + bpp <= size) v = bpp == 2 ? FxU32(m.bytes[at] | m.bytes[at + 1] << 8) : m.bytes[at];
-                row[x] = Texel(d.format, v, pal, ncc);
+                if (direct) row[x] = Texel(d.format, v, nullptr, nullptr);
+                else row[x] = bpp == 1 ? lut[v] : (lut[v & 0xFF] & 0xFFFFFFu) | (v >> 8) << 24;
             }
             continue;
         }

@@ -224,13 +224,11 @@ struct Board {
     int numTmu = 2;
     FxU32 tmuMem = 4u << 20;  // bytes of texture memory a TMU has
     int screenW = 640, screenH = 480;
-    GrScreenResolution_t res = GR_RESOLUTION_NONE;
     GrScreenRefresh_t refresh = GR_REFRESH_NONE;
     GrColorFormat_t colorFormat = GR_COLORFORMAT_ARGB;
     int numColorBuffers = 2, numAuxBuffers = 1;
     HWND hwnd = nullptr;         // the window the screen is shown in
     unsigned stippleWrites = 0;  // writes to the stipple register (rotate mode starts over at each)
-    bool ownWindow = false;      // ... made by gl2d9 (none given, none active)
     GrErrorCallbackFnc_t errorCallback = nullptr;
     // NCC tables and palette as downloaded to each TMU (grTexDownloadTable).
     GuNccTable ncc[kMaxTmu][2]{};
@@ -239,10 +237,19 @@ struct Board {
     // the same table again (games download a palette for every texture they draw).
     unsigned paletteHash[kMaxTmu] = {};
     unsigned nccHash[kMaxTmu][2] = {};
+    // Glide 3: the last table downloaded was a 6666 palette (3dfx's gc->state.tex_table);
+    // grTexSource then draws a P_8 texture as P_8_6666, as 3dfx's gtex.c does.
+    bool palette6666 = false;
     // gu texture manager (guTexAllocateMemory): the free base per TMU and its records.
     FxU32 freeMemBase[kMaxTmu] = {};
     std::vector<GrMipMapInfo> mipmaps;
     GrMipMapId_t currentMipMap[kMaxTmu] = {GR_NULL_MIPMAP_HANDLE, GR_NULL_MIPMAP_HANDLE, GR_NULL_MIPMAP_HANDLE};
+    // Which NCC table of a TMU guTexSource last gave to a mipmap, the one it uses for that
+    // mipmap again, and the one it gives to the next.
+    GrMipMapId_t nccMipMap[kMaxTmu][2] = {{GR_NULL_MIPMAP_HANDLE, GR_NULL_MIPMAP_HANDLE},
+                                          {GR_NULL_MIPMAP_HANDLE, GR_NULL_MIPMAP_HANDLE},
+                                          {GR_NULL_MIPMAP_HANDLE, GR_NULL_MIPMAP_HANDLE}};
+    int nextNcc[kMaxTmu] = {};
     // grTriStats / grSstPerfStats counters.
     FxU32 trisIn = 0, trisOut = 0, swaps = 0, pointsDrawn = 0, linesDrawn = 0;
 };

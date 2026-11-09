@@ -11,7 +11,8 @@ void DownloadLevel(GrChipID_t tmu, FxU32 startAddress, GrLOD_t thisLod, GrLOD_t 
 // The tables go to every TMU (as 3dfx's Glide broadcasts them). Downloads that change
 // nothing don't disturb the renderer; others tell it (RenderTexturesChanged).
 void DownloadNcc(GrChipID_t tmu, int which, const GuNccTable* table);
-void DownloadPalette(GrChipID_t tmu, const FxU32* entries, int start, int end);
+// six: a GR_TEXTABLE_PALETTE_6666_EXT, kept as the TMU keeps it (each channel's top 6 bits).
+void DownloadPalette(GrChipID_t tmu, const FxU32* entries, int start, int end, bool six = false);
 FxU32 LevelAddress(FxU32 baseBytes, GrLOD_t lod, GrAspectRatio_t aspect, GrTextureFormat_t format, bool tsplit);
 
 // A texture as a TMU's registers describe it.

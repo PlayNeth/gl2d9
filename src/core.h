@@ -8,10 +8,13 @@
 
 namespace gl2d9 {
 
-void CoreInit();      // grGlideInit
-void CoreShutdown();  // grGlideShutdown
+void CoreInit();        // grGlideInit
+void CoreEnsureInit();  // CoreInit, unless done (calls a game may make before grGlideInit)
+void CoreShutdown();    // grGlideShutdown
 // Width and height of a resolution (false: not one there is).
 bool ResolutionSize(GrScreenResolution_t res, int* w, int* h);
+// The rate a GrScreenRefresh_t asks for, in Hz (0: none, or not one there is).
+int RefreshHz(GrScreenRefresh_t refresh);
 FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refresh, GrColorFormat_t format,
                    GrOriginLocation_t origin, int numColorBuffers, int numAuxBuffers);
 void CoreWinClose();

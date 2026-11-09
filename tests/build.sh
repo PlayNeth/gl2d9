@@ -5,7 +5,7 @@
 # headers only. The import libraries are made from gl2d9's .def files (the names the games
 # import: _grFoo@N), into tests/bin/.
 set -e
-: "${GLIDE_SRC:?set GLIDE_SRC to 3dfx's Glide source tree}"
+: "${GLIDE_SRC:?set GLIDE_SRC to the 3dfx Glide source tree}"
 here=$(cd "$(dirname "$0")" && pwd)
 src="$here/../src"
 mkdir -p "$here/bin"

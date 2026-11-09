@@ -4,6 +4,9 @@
 // unlock the pixels that differ from the copy are the ones written. A write lock in a 32-bit
 // mode has memory of its own (its rows are laid out differently: shared, a read lock's 16-bit
 // fill wrote over the game's 32-bit pixels, and the other way round).
+// A limit of this: a pixel written with the value it already had is not seen. Without the
+// pixel pipeline that changes nothing; with it, that pixel is not blended, fogged or given the
+// constant depth, as the Voodoo would.
 #include "lfb.h"
 
 #include <algorithm>
@@ -66,26 +69,32 @@ FxU8* WriteMem() { return PixelBytes(g_l.writeMode) == 4 ? g_l.mem32 : g_l.mem; 
 
 int Lanes() { return int((St().r.lfbMode & SST_LFB_RGBALANES) >> SST_LFB_RGBALANES_SHIFT); }
 
+// The 16-bit formats with five bits a channel: in the RGBA and BGRA lanes their alpha (or
+// unused) bit is the lowest instead of the highest (5551, as MAME's Voodoo has it).
+bool Is555(int mode) {
+    return mode == GR_LFBWRITEMODE_555 || mode == GR_LFBWRITEMODE_555_DEPTH || mode == GR_LFBWRITEMODE_1555 ||
+           mode == GR_LFBWRITEMODE_1555_DEPTH;
+}
+
 // ARGB from a pixel of a write format (where the format has no alpha, grLfbConstantAlpha's:
 // what the pixel pipeline tests and blends with).
 FxU32 ToArgb(int mode, FxU32 v, int lanes) {
-    FxU32 r, g, b, a = St().lfbConstantAlpha & 0xFF;
+    const FxU32 constantAlpha = (St().lfbConstantAlpha & 0xFF) << 24;
+    FxU32 c;
     switch (mode) {
     case GR_LFBWRITEMODE_565:
-    case GR_LFBWRITEMODE_565_DEPTH:
-        r = (v >> 11) & 0x1F, g = (v >> 5) & 0x3F, b = v & 0x1F;
-        r = (r << 3) | (r >> 2), g = (g << 2) | (g >> 4), b = (b << 3) | (b >> 2);
-        break;
+    case GR_LFBWRITEMODE_565_DEPTH: c = (pix::Scalar565(v) & 0xFFFFFF) | constantAlpha; break;
     case GR_LFBWRITEMODE_555:
     case GR_LFBWRITEMODE_555_DEPTH:
     case GR_LFBWRITEMODE_1555:
     case GR_LFBWRITEMODE_1555_DEPTH:
-        r = (v >> 10) & 0x1F, g = (v >> 5) & 0x1F, b = v & 0x1F;
-        r = (r << 3) | (r >> 2), g = (g << 3) | (g >> 2), b = (b << 3) | (b >> 2);
-        if (mode == GR_LFBWRITEMODE_1555 || mode == GR_LFBWRITEMODE_1555_DEPTH) a = (v & 0x8000) ? 0xFF : 0;
+        if (lanes >= 2) v = (v >> 1) | (v & 1) << 15;  // 5551 to 1555
+        c = pix::Scalar1555(v);
+        if (mode == GR_LFBWRITEMODE_555 || mode == GR_LFBWRITEMODE_555_DEPTH) c = (c & 0xFFFFFF) | constantAlpha;
         break;
     case GR_LFBWRITEMODE_888:
-    case GR_LFBWRITEMODE_8888:
+    case GR_LFBWRITEMODE_8888: {
+        FxU32 r, g, b, a;
         // The lanes of grLfbWriteColorFormat: ARGB, ABGR, RGBA, BGRA.
         switch (lanes) {
         case 1: a = v >> 24, b = (v >> 16) & 0xFF, g = (v >> 8) & 0xFF, r = v & 0xFF; break;
@@ -93,13 +102,14 @@ FxU32 ToArgb(int mode, FxU32 v, int lanes) {
         case 3: b = v >> 24, g = (v >> 16) & 0xFF, r = (v >> 8) & 0xFF, a = v & 0xFF; break;
         default: a = v >> 24, r = (v >> 16) & 0xFF, g = (v >> 8) & 0xFF, b = v & 0xFF; break;
         }
-        if (mode == GR_LFBWRITEMODE_888) a = St().lfbConstantAlpha & 0xFF;
+        if (mode == GR_LFBWRITEMODE_888) return constantAlpha | r << 16 | g << 8 | b;
         return a << 24 | r << 16 | g << 8 | b;
+    }
     default: return 0;
     }
     // 16-bit lanes: ABGR and BGRA swap red and blue.
-    if (lanes == 1 || lanes == 3) std::swap(r, b);
-    return a << 24 | r << 16 | g << 8 | b;
+    if (lanes == 1 || lanes == 3) c = (c & 0xFF00FF00u) | (c >> 16 & 0xFF) | (c & 0xFF) << 16;
+    return c;
 }
 
 // A pixel of a write format from ARGB (as the write lock's memory is filled).
@@ -117,13 +127,10 @@ FxU32 FromArgb(int mode, FxU32 c, int lanes) {
     default: break;
     }
     if (lanes == 1 || lanes == 3) std::swap(r, b);
-    switch (mode) {
-    case GR_LFBWRITEMODE_555:
-    case GR_LFBWRITEMODE_555_DEPTH: return (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3);
-    case GR_LFBWRITEMODE_1555:
-    case GR_LFBWRITEMODE_1555_DEPTH: return 0x8000 | (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3);
-    default: return (r >> 3) << 11 | (g >> 2) << 5 | (b >> 3);
-    }
+    if (!Is555(mode)) return (r >> 3) << 11 | (g >> 2) << 5 | (b >> 3);
+    FxU32 v = (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3);
+    if (mode == GR_LFBWRITEMODE_1555 || mode == GR_LFBWRITEMODE_1555_DEPTH) v |= 0x8000;
+    return lanes >= 2 ? (v << 1 | v >> 15) & 0xFFFF : v;  // 1555 to 5551
 }
 
 bool IsColorBuffer(int buffer) { return buffer == GR_BUFFER_FRONTBUFFER || buffer == GR_BUFFER_BACKBUFFER; }
@@ -246,7 +253,9 @@ FxBool LfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t writeMode, GrO
                FxBool pixelPipeline, GrLfbInfo_t* info) {
     if (!g_board.open || !info || !RenderReady() || !Memory(2)) return FXFALSE;
     type &= ~GR_LFB_NOIDLE;
-    origin = origin == GR_ORIGIN_LOWER_LEFT ? GR_ORIGIN_LOWER_LEFT : GR_ORIGIN_UPPER_LEFT;
+    // 3dfx's grLfbLock takes every origin but upper-left, GR_ORIGIN_ANY too, as lower-left
+    // (it sets the Y origin bit for any nonzero value).
+    origin = origin == GR_ORIGIN_UPPER_LEFT ? GR_ORIGIN_UPPER_LEFT : GR_ORIGIN_LOWER_LEFT;
     if (type == GR_LFB_READ_ONLY) {
         if (g_l.readBuffer >= 0) return FXFALSE;
         if (buffer != GR_BUFFER_FRONTBUFFER && buffer != GR_BUFFER_BACKBUFFER && buffer != GR_BUFFER_AUXBUFFER)

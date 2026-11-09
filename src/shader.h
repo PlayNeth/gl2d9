@@ -20,10 +20,14 @@ struct ShaderKey {
     FxU32 blend;      // alphaMode (blend factors, alpha test): blended in the shader (0: by Direct3D)
     FxU8 depthConst;  // GR_DEPTHBUFFER_*_COMPARE_TO_BIAS: the depth tested is zaColor's (c11.x)
     FxU8 depthOut;    // the shader writes the depth (DEPTH_* bits below)
+    FxU8 dstAlpha;    // blended in the shader: the target's alpha is the alpha buffer (else 1, as with no alpha planes)
     bool operator==(const ShaderKey& o) const;
 };
 enum : FxU8 { DEPTH_Z = 1, DEPTH_W = 2, DEPTH_BIAS = 4, DEPTH_OVERLAY = 8 };
 ShaderKey MakeShaderKey(const GlideState& st, int numTmu);
+// Compare to bias with depth writes: the shader of the second pass, writing the pixel's own
+// depth (the first, k's, tests zaColor's).
+ShaderKey DepthWriteKey(ShaderKey k, const Regs& r);
 // A pass laid on a surface already drawn (overlaybias): one that doesn't write depth, or that
 // adds or multiplies. Drawn without writing depth, pulled forward.
 bool IsOverlay(const Regs& r);
@@ -34,9 +38,20 @@ bool TmuActive(FxU32 textureMode);
 // it then reads the target from a copy (register s3) and does the alpha test itself.
 bool BlendInShader(const Regs& r);
 // HLSL doing it: the alpha test and blending of alphaMode on c, a and prefog against dstExpr's
-// pixel (the alpha test's reference in target.y, kPsTarget).
+// pixel (the alpha test's reference in target.y, kPsTarget). DstExpr gives alpha 1 where there
+// is no alpha buffer (DstExpr).
+std::string DstExpr(const char* sample, bool alphaBuffer);
 std::string BlendCode(FxU32 alphaMode, const char* dstExpr);
+// The alpha test alone (alphaMode's function), on alpha8, an expression of the 8-bit alpha
+// (0..255), compared with the reference as integers: Direct3D's own test compares a float
+// with its reference / 255, and equality isn't exact.
+std::string AlphaTestCode(FxU32 alphaMode, const char* alpha8);
+// HLSL for the fog of fogMode on c: the iterated alpha and Z as the alpha and z expressions give
+// them, and tableIndex the statements that set idx, the fog table's entry (0..63, fractional).
+std::string FogCode(FxU32 fogMode, const char* alpha, const char* z, const char* tableIndex);
 IDirect3DPixelShader9* GetShader(IDirect3DDevice9* dev, const ShaderKey& k);  // cached; null if it can't be made
+// The disk cache's shaders for these settings made at once (the device just made).
+void PrewarmShaders(IDirect3DDevice9* dev);
 void ReleaseShaders();
 IDirect3DPixelShader9* CompileFixed(IDirect3DDevice9* dev, const char* src);
 

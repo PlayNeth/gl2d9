@@ -25,6 +25,7 @@ Glide 2 (`glide2x.dll`; `g21win` loads `glide.dll`):
 | `pfl` | `PREFOG_COLOR` blending through a frame buffer write and a triangle | two purple squares; prints `801f` for both |
 | `focus` | its own window drawn to from the window's thread, or (`focus thread`) from another as Unreal does, through focus changes (Alt+Tab, minimize) done from outside; `paintfg` too: its `WM_PAINT` takes the foreground back (NFS III); `reopen` too: Glide closed and opened again five times, from the drawing thread with `thread` | prints the frames each second; the picture comes back after each focus change, minimized while away (with `paintfg`, away stays away); with `reopen`, prints `closed: style X (was X), procedure the program's` |
 | `ovl` | overlays (`overlaybias`): an additive light on a road cut into other triangles, its depth a little off, Z and W buffer | the light patches clean, no road showing through |
+| `cbz` | destination alpha without an alpha buffer; Z compare-to-bias with depth writes (the pixel's own Z written) | prints `f800`, `07e0` and `8000`; a red square, a blue one with a green one in it |
 
 Glide 3 (`glide3x.dll`):
 
@@ -34,6 +35,8 @@ Glide 3 (`glide3x.dll`):
 | `lfbwide` | frame buffer writes at 1600x1200, wider than the Voodoo's 1024-pixel rows (NFS Porsche Unleashed's loading screens) | prints reds `1 17 29`; a smooth red ramp over the whole width |
 | `stiprot` | stipple rotate mode against a model of the Voodoo's rasterizer, clip window, both origins | prints a handful differing (edge pixels Direct3D misses), not thousands, twice |
 | `reopen` | reopening on the game's window after another subclass took it (NFS High Stakes with dd2d9), at 1600x1200 | prints `open 1600` and `done`, a green triangle |
+| `alphatest` | the alpha test on the 8-bit combined alpha: a constant alpha against itself; iterated alphas with a fraction (dropped, as the Voodoo does); frame buffer writes through the pipeline | prints `0 of 256 wrong` six times and `not drawn` four times |
+| `pal6666` | an 8-bit palette texture with a 6666 palette (`GR_TEXTABLE_PALETTE_6666_EXT`, offered as `PALETTE6666`): the palette's alpha blended and alpha tested | prints `PALETTE6666 offered` and `read 800f 001f`; a dark purple square, the right one not drawn |
 | `lfblock` | frame buffer locks held while other things happen: a read lock taken during an 8888 write lock; a pixel written, `grLfbReadRegion`, then a triangle drawn over it before the unlock | prints `001f` and `07e0`; a blue square, a green triangle |
 
 The 3dfx SDK's own test programs (`glide2x/cvg/glide/tests`, `glide3x/cvg/glide3/tests` in the

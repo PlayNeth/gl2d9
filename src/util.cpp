@@ -7,6 +7,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -495,6 +496,20 @@ void Log(int level, const char* fmt, ...) {
     LeaveCriticalSection(&g_logLock);
 }
 
+void LogCallFailed(const char* where) {
+    const char* what = "an exception";
+    if (std::exception_ptr e = std::current_exception()) {
+        try {
+            std::rethrow_exception(e);
+        } catch (const std::exception& x) { what = x.what(); } catch (...) {
+        }
+    }
+    // The first five logged, then every hundredth (a game out of memory fails call after call).
+    static LONG failures;
+    const LONG n = InterlockedIncrement(&failures);
+    if (n <= 5 || n % 100 == 0) GL_LOG("%s failed: %s (%ld so far): what it did dropped", where, what, n);
+}
+
 // At process exit the other threads are gone, and one may have died holding the
 // log lock: only flush if it is free, so exit can't hang.
 void LogFlush(bool processExit) {
@@ -518,6 +533,13 @@ void LogFlush(bool processExit) {
 // hyperthreads of one core would be about one core's worth), the first core last (it takes
 // most of the system's interrupts) when there are cores to spare. For games of the
 // single-core era whose timing breaks across cores.
+namespace {
+DWORD_PTR g_cpusBefore;  // the process's mask before cpus= (0: not changed)
+// Set in the process's environment once any of gl2d9's DLLs opens a board: a game may load
+// glide2x.dll and glide3x.dll both, and one freed mustn't undo cpus= under the other.
+const wchar_t kGlideUsed[] = L"GL2D9_GLIDE_USED";
+}  // namespace
+
 void ApplyCpus() {
     if (g_config.cpus <= 0) return;
     DWORD_PTR process = 0, system = 0;
@@ -546,7 +568,20 @@ void ApplyCpus() {
         count++;
     }
     if (!mask || !SetProcessAffinityMask(GetCurrentProcess(), mask)) return;
+    g_cpusBefore = process;
     Log(1, "cpus: the game runs on %d processor(s) (mask 0x%lx)", count, static_cast<unsigned long>(mask));
+}
+
+// The processors are set as the DLL loads, before the game's own start-up (a game that times
+// or calibrates on one core before it opens Glide stays on it). A program that only probes for
+// Glide (loads the DLL, asks what hardware there is, then uses another renderer and frees it)
+// gets its processors back: used means a board opened (grSstWinOpen).
+void CpusGlideUsed() { SetEnvironmentVariableW(kGlideUsed, L"1"); }
+
+void UndoCpusIfUnused() {
+    if (!g_cpusBefore || GetEnvironmentVariableW(kGlideUsed, nullptr, 0)) return;
+    SetProcessAffinityMask(GetCurrentProcess(), g_cpusBefore);
+    g_cpusBefore = 0;
 }
 
 namespace {
@@ -618,6 +653,11 @@ void LimitFrame() {
     next += period;
 }
 
+bool OnWine() {
+    static const bool wine = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != nullptr;
+    return wine;
+}
+
 namespace {
 // The display's refresh rate, asked again every few seconds (the game may switch modes).
 // Called by the thread that swaps.
@@ -678,7 +718,7 @@ const Dwm& DwmFunctions() {
     static const Dwm dwm = [] {
         Dwm r;
         if (g_config.vsync == kVSyncOff) return r;
-        if (GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version")) return r;
+        if (OnWine()) return r;
         wchar_t path[MAX_PATH];
         const UINT n = GetSystemDirectoryW(path, MAX_PATH);
         if (!n || n >= MAX_PATH - 12) return r;

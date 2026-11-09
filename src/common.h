@@ -14,7 +14,7 @@
 
 namespace gl2d9 {
 
-#define GL2D9_VERSION "1.1.2"
+#define GL2D9_VERSION "1.2.0"
 
 enum { kDisplaySwitch, kDisplayWindow, kDisplayBorderless };
 enum { kVSyncAuto, kVSyncOn, kVSyncOff };
@@ -27,7 +27,7 @@ struct Config {
     int display = kDisplayBorderless;  // switch: real mode switch; window; borderless: the screen covered, scaled
     int stretch = 0;                   // window & borderless scaling: 0 aspect, 1 fill, 2 integer
     int filter = 1;                    // the frame scaled to the screen: 0 point, 1 linear, 2 sharp
-    int vsync = kVSyncAuto;            // auto: grBufferSwap's interval; on / off: forced
+    int vsync = kVSyncAuto;            // auto: grBufferSwap's interval (0: at once); on / off: forced
     int scale = 1;                     // the game's resolution drawn N times larger on the GPU (1-8)
     bool systemD3D9 = true;            // Windows' own d3d9.dll, not one in the game folder (DXVK)
     int tmuMB = 0;                     // texture memory a TMU reports (and games can use), MB; 0 = auto
@@ -53,6 +53,8 @@ std::wstring ShaderCachePath();
 // ---------------------------------------------------------------- logging
 void LogInit();
 void ApplyCpus();                      // cpus=: the processors the process runs on (after LogInit: logged)
+void CpusGlideUsed();                  // grSstWinOpen: the game uses Glide (cpus= stays when the DLL goes)
+void UndoCpusIfUnused();               // DLL unloaded, the process going on: cpus= undone if Glide went unused
 void LimitFrame();                     // fpslimit=: waits out the rest of the frame's time (at the buffer swap)
 void LimitSwapInterval(int interval);  // vsync=auto: grBufferSwap(2 or more), frames that many refreshes apart
 extern int g_logLevel;                 // (util.cpp) read at every log and trace site: inline
@@ -63,6 +65,8 @@ inline int LogLevel() { return g_logLevel; }
 // `slots` refreshes on (the thread that swaps, without the lock).
 bool CompositorPaced();
 void PaceSwap(int slots);
+// Running under Wine (ntdll's wine_get_version), asked once.
+bool OnWine();
 void Log(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 void LogFlush(bool processExit);
 void CrashLoggerRemove();  // before the DLL is unloaded (FreeLibrary)
@@ -103,6 +107,9 @@ struct Guard {
 // aborted, "requested the Runtime to terminate"). Called from the export's handler, after
 // the lock was released by unwinding. With a value: that returned (the call's failure).
 void CallFailed(const char* where);
+// Its log line only (util.cpp): for a handler that may not wait for the lock (the window
+// procedure, on the window's thread) and whose failure isn't the renderer's.
+void LogCallFailed(const char* where);
 template <class T>
 T CallFailed(const char* where, T value) {
     CallFailed(where);

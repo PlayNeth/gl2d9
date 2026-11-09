@@ -1,26 +1,3 @@
-// ---------------------------------------------------------------------------------------------
-// The antialiasing in this file is derived from 3dfx Interactive's Glide source code (Glide 2's
-// gaa.c: the antialiasing, under "antialiasing" below), copyright 3dfx Interactive, Inc. 1999,
-// and is distributed under the 3DFX GLIDE Source Code General Public License (LICENSE-3DFX);
-// recipients who wish to copy, distribute or modify it can only do so under that license. It is
-// provided without warranty (section 5 of that license). Changed by PlayNeth, 1 November 2026:
-// translated to C++ for gl2d9, to run on Direct3D 9. The rest of gl2d9 is under the MIT license
-// (LICENSE).
-//
-// THIS SOFTWARE IS SUBJECT TO COPYRIGHT PROTECTION AND IS OFFERED ONLY PURSUANT TO THE 3DFX
-// GLIDE GENERAL PUBLIC LICENSE. THERE IS NO RIGHT TO USE THE GLIDE TRADEMARK WITHOUT PRIOR
-// WRITTEN PERMISSION OF 3DFX INTERACTIVE, INC. A COPY OF THIS LICENSE MAY BE OBTAINED FROM THE
-// DISTRIBUTOR OR BY CONTACTING 3DFX INTERACTIVE INC (info@3dfx.com). THIS PROGRAM. IS PROVIDED
-// "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED. SEE THE 3DFX GLIDE GENERAL
-// PUBLIC LICENSE FOR A FULL TEXT OF THE NON-WARRANTY PROVISIONS.
-//
-// USE, DUPLICATION OR DISCLOSURE BY THE GOVERNMENT IS SUBJECT TO RESTRICTIONS AS SET FORTH IN
-// SUBDIVISION (C)(1)(II) OF THE RIGHTS IN TECHNICAL DATA AND COMPUTER SOFTWARE CLAUSE AT DFARS
-// 252.227-7013, AND/OR IN SIMILAR OR SUCCESSOR CLAUSES IN THE FAR, DOD OR NASA FAR SUPPLEMENT.
-// UNPUBLISHED RIGHTS RESERVED UNDER THE COPYRIGHT LAWS OF THE UNITED STATES.
-//
-// COPYRIGHT 3DFX INTERACTIVE, INC. 1999, ALL RIGHTS RESERVED
-// ---------------------------------------------------------------------------------------------
 // See core.h.
 #include "core.h"
 
@@ -28,28 +5,13 @@
 
 #include <algorithm>
 #include <cmath>
-#include <exception>
 
+#include "coreint.h"
 #include "lfb.h"
 #include "texmem.h"
 #include "window.h"
 
 namespace gl2d9 {
-
-namespace {
-
-struct ResSize {
-    int w, h;
-};
-const ResSize kRes[] = {
-    {320, 200},  {320, 240},  {400, 256},   {512, 384},   {640, 200},   {640, 350},   {640, 400},   {640, 480},
-    {800, 600},  {960, 720},  {856, 480},   {512, 256},   {1024, 768},  {1280, 1024}, {1600, 1200}, {400, 300},
-    {1152, 864}, {1280, 960}, {1600, 1024}, {1792, 1344}, {1856, 1392}, {1920, 1440}, {2048, 1536}, {2048, 2048},
-};
-
-// Games snapping their vertices to 1/16 pixel add (3 << 18) and take it off again; one that
-// leaves it on (Glide's own debug output allows for it) is brought back to the screen.
-inline float Unsnap(float v) { return std::fabs(v) >= 262144.0f ? v - 786432.0f : v; }
 
 // Glide's triangle setup: zero-area triangles are dropped, and the culled side by the sign
 // of the area (dxAB * dyBC - dxBC * dyAB): GR_CULL_NEGATIVE drops it negative, POSITIVE
@@ -66,16 +28,20 @@ bool VisibleSnapped(const RVtx& a, const RVtx& b, const RVtx& c) {
     return true;
 }
 
-inline RVtx Snapped(const RVtx& v) {
-    RVtx o = v;
-    o.x = Unsnap(v.x);
-    o.y = Unsnap(v.y);
-    return o;
-}
+std::vector<RVtx> g_tris;
 
-bool Visible(const RVtx& a, const RVtx& b, const RVtx& c) { return VisibleSnapped(Snapped(a), Snapped(b), Snapped(c)); }
+namespace {
 
-std::vector<RVtx> g_tris;  // triangles of one call, drawn together
+struct ResSize {
+    int w, h;
+};
+const ResSize kRes[] = {
+    {320, 200},  {320, 240},  {400, 256},   {512, 384},   {640, 200},   {640, 350},   {640, 400},   {640, 480},
+    {800, 600},  {960, 720},  {856, 480},   {512, 256},   {1024, 768},  {1280, 1024}, {1600, 1200}, {400, 300},
+    {1152, 864}, {1280, 960}, {1600, 1024}, {1792, 1344}, {1856, 1392}, {1920, 1440}, {2048, 1536}, {2048, 2048},
+};
+
+unsigned g_opened;  // boards opened so far (which one is open: CoreSwap)
 
 // Triangle a, b, c added to g_tris, brought back to the screen, unless culled (each vertex
 // copied and brought back once, not once for the test and again for the drawing).
@@ -92,51 +58,6 @@ inline void AddTriangle(const RVtx& a, const RVtx& b, const RVtx& c) {
     g_board.trisOut++;
 }
 
-// ---- antialiasing, as 3dfx's Glide does it (gaa.c): the primitive drawn, then a strip a
-// pixel wide outside each antialiased edge, its outer side at alpha 0 (the game blends with
-// alpha), unculled and without writing depth.
-enum Sense { kSenseTop, kSenseLeft, kSenseBottom, kSenseRight };
-
-// Which way edge a-b faces away from c (aaCalcEdgeSense).
-Sense EdgeSense(const RVtx* a, const RVtx* b, const RVtx* c) {
-    if (a->y >= b->y) std::swap(a, b);
-    const float dx = a->x - b->x, dy = a->y - b->y;
-    if (dx == 0.0f) return c->x > a->x ? kSenseLeft : kSenseRight;
-    if (dy == 0.0f) return c->y > a->y ? kSenseBottom : kSenseTop;
-    const float cp = (a->x - c->x) * (b->y - c->y) - (a->y - c->y) * (b->x - c->x);
-    if (dx > 0.0f) {
-        if (dx >= -dy) return cp > 0.0f ? kSenseTop : kSenseBottom;
-        return cp > 0.0f ? kSenseRight : kSenseLeft;
-    }
-    if (dx <= dy) return cp < 0.0f ? kSenseTop : kSenseBottom;
-    return cp < 0.0f ? kSenseLeft : kSenseRight;
-}
-
-// The two triangles along edge a-b (grAADrawTriEdge), into g_tris.
-void EdgeTris(const RVtx& a, const RVtx& b, const RVtx& c) {
-    RVtx e = a, f = b;
-    e.a = f.a = 0.0f;
-    switch (EdgeSense(&a, &b, &c)) {
-    case kSenseTop: e.y += 1, f.y += 1; break;
-    case kSenseLeft: e.x -= 1, f.x -= 1; break;
-    case kSenseBottom: e.y -= 1, f.y -= 1; break;
-    case kSenseRight: e.x += 1, f.x += 1; break;
-    }
-    const RVtx* order[6] = {&a, &e, &f, &a, &f, &b};
-    for (const RVtx* v : order) g_tris.push_back(*v);
-}
-
-// g_tris drawn without depth writes (edges and fringes).
-void DrawFringe() {
-    if (g_tris.empty()) return;
-    FxU32& fbz = St().r.fbzMode;
-    const FxU32 saved = fbz;
-    fbz &= ~SST_ZAWRMASK;
-    RenderTriangles(g_tris.data(), int(g_tris.size()));
-    fbz = saved;
-    g_tris.clear();
-}
-
 }  // namespace
 
 bool ResolutionSize(GrScreenResolution_t res, int* w, int* h) {
@@ -147,18 +68,13 @@ bool ResolutionSize(GrScreenResolution_t res, int* w, int* h) {
     return true;
 }
 
+int RefreshHz(GrScreenRefresh_t refresh) {
+    static const int kRates[] = {60, 70, 72, 75, 80, 90, 100, 85, 120};
+    return refresh >= 0 && refresh < int(sizeof(kRates) / sizeof(kRates[0])) ? kRates[refresh] : 0;
+}
+
 void CallFailed(const char* where) {
-    const char* what = "an exception";
-    if (std::exception_ptr e = std::current_exception()) {
-        try {
-            std::rethrow_exception(e);
-        } catch (const std::exception& x) { what = x.what(); } catch (...) {
-        }
-    }
-    // The first five logged, then every hundredth (a game out of memory fails call after call).
-    static LONG failures;
-    const LONG n = InterlockedIncrement(&failures);
-    if (n <= 5 || n % 100 == 0) GL_LOG("%s failed: %s (%ld so far): what it did dropped", where, what, n);
+    LogCallFailed(where);
     try {
         Guard guard;
         RenderRecover();
@@ -180,6 +96,10 @@ void CoreInit() {
     }
 }
 
+void CoreEnsureInit() {
+    if (g_texMem[0].bytes.empty()) CoreInit();
+}
+
 void CoreShutdown() {
     if (g_board.open) CoreWinClose();
 }
@@ -187,7 +107,7 @@ void CoreShutdown() {
 FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refresh, GrColorFormat_t format,
                    GrOriginLocation_t origin, int numColorBuffers, int numAuxBuffers) {
     if (g_board.open) CoreWinClose();
-    if (g_texMem[0].bytes.empty()) CoreInit();
+    CoreEnsureInit();
     int w = 640, h = 480;
     if (res == GR_RESOLUTION_NONE) {
         // A window's own size (Voodoo Rush): its client area.
@@ -202,7 +122,6 @@ FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refres
     }
     g_board.screenW = w;
     g_board.screenH = h;
-    g_board.res = res;
     g_board.refresh = refresh;
     g_board.colorFormat = format;
     g_board.numColorBuffers = std::clamp(numColorBuffers, 2, 3);
@@ -215,6 +134,7 @@ FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refres
     GL_LOG("grSstWinOpen: %dx%d, %s origin, %d color / %d aux buffers, refresh %ld", w, h,
            origin == GR_ORIGIN_LOWER_LEFT ? "lower left" : "upper left", g_board.numColorBuffers, g_board.numAuxBuffers,
            static_cast<long>(refresh));
+    CpusGlideUsed();
     try {
         if (!WindowOpen(hwnd)) return FXFALSE;
         if (!RenderOpen(g_board.hwnd)) {
@@ -229,6 +149,7 @@ FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refres
         throw;
     }
     RenderSetGamma(1.3f);  // Glide's default (the Voodoo's own gamma table)
+    g_opened++;
     g_board.open = true;
     WindowOpened();
     return FXTRUE;
@@ -237,17 +158,21 @@ FxBool CoreWinOpen(HWND hwnd, GrScreenResolution_t res, GrScreenRefresh_t refres
 void CoreWinClose() {
     if (!g_board.open) return;
     GL_LOG("grSstWinClose (%lu frames)", static_cast<unsigned long>(g_board.swaps));
+    // Closed first: the window's thread, changing the display mode or covering the screen with
+    // the focus back (Activate), mustn't take the board for open while it is taken down, nor
+    // a grSstWinOpen from the game's procedure, as the window is put back (WindowClose).
+    g_board.open = false;
     LfbReset();
     RenderClose();
     WindowClose();
-    g_board.open = false;
 }
 
 void CoreTriangle(const RVtx& a, const RVtx& b, const RVtx& c) {
     g_board.trisIn++;
-    if (!g_board.open || !Visible(a, b, c)) return;
-    g_board.trisOut++;
+    if (!g_board.open) return;
     const RVtx v[3] = {Snapped(a), Snapped(b), Snapped(c)};
+    if (!VisibleSnapped(v[0], v[1], v[2])) return;
+    g_board.trisOut++;
     RenderTriangles(v, 3);
 }
 
@@ -312,59 +237,6 @@ void CoreLine(const RVtx& a0, const RVtx& b0) {
     RenderTriangles(tri, 6);
 }
 
-void CoreAATriangle(const RVtx& a0, const RVtx& b0, const RVtx& c0, bool ab, bool bc, bool ca) {
-    g_board.trisIn++;
-    if (!g_board.open || !Visible(a0, b0, c0)) return;
-    g_board.trisOut++;
-    const RVtx v[3] = {Snapped(a0), Snapped(b0), Snapped(c0)};
-    RenderTriangles(v, 3);
-    g_tris.clear();
-    if (ab) EdgeTris(v[0], v[1], v[2]);
-    if (bc) EdgeTris(v[1], v[2], v[0]);
-    if (ca) EdgeTris(v[2], v[0], v[1]);
-    DrawFringe();
-}
-
-// grAADrawPolygon: the fan, and the edges on its outline.
-void CoreAAFan(const RVtx* v, int n) {
-    if (n < 3 || !g_board.open) return;
-    for (int i = 1; i + 1 < n; i++) CoreAATriangle(v[0], v[i], v[i + 1], i == 1, true, i == n - 2);
-}
-
-// A square of four triangles around the point, its corners at alpha 0.
-void CoreAAPoint(const RVtx& p0) {
-    if (!g_board.open) return;
-    g_board.pointsDrawn++;
-    const RVtx p = Snapped(p0);
-    RVtx c[4] = {p, p, p, p};
-    static const float kCorner[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
-    for (int i = 0; i < 4; i++) c[i].x += kCorner[i][0], c[i].y += kCorner[i][1], c[i].a = 0.0f;
-    g_tris.clear();
-    for (int i = 0; i < 4; i++) {
-        g_tris.push_back(c[i]);
-        g_tris.push_back(c[(i + 1) & 3]);
-        g_tris.push_back(p);
-    }
-    RenderTriangles(g_tris.data(), int(g_tris.size()));
-    g_tris.clear();
-}
-
-// The line two pixels across, its sides at alpha 0 (grAADrawLine).
-void CoreAALine(const RVtx& a0, const RVtx& b0) {
-    if (!g_board.open) return;
-    RVtx v1 = Snapped(a0), v2 = Snapped(b0);
-    if (v2.y < v1.y) std::swap(v1, v2);
-    const float adx = std::fabs(v2.x - v1.x), ady = std::fabs(v2.y - v1.y);
-    if (adx == 0 && ady == 0) return;
-    g_board.linesDrawn++;
-    RVtx a = v1, b = v2, e = v1, f = v2;
-    a.a = b.a = e.a = f.a = 0.0f;
-    if (adx >= ady) a.y -= 1, b.y -= 1, e.y += 1, f.y += 1;
-    else a.x += 1, b.x += 1, e.x -= 1, f.x -= 1;
-    const RVtx tri[12] = {a, v2, b, a, v2, v1, v1, f, e, v1, v2, f};
-    RenderTriangles(tri, 12);
-}
-
 void CoreClear(GrColor_t color, GrAlpha_t alpha, FxU32 depth) {
     if (!g_board.open) return;
     RenderClear(SwizzleColor(color), alpha, FxU16(depth));
@@ -376,7 +248,11 @@ void CoreSwap(int interval) {
     g_board.swaps++;
     // The waits (fpslimit=, the swap interval) without the lock: held, the window's
     // procedure (focus changes, repaints) and any other thread calling Glide waited too.
-    // (The entry's one hold let go: the swap isn't called with the lock held otherwise.)
+    // (The entry's own hold let go. A swap called from the game's procedure while gl2d9 holds
+    // the lock on this thread, sending it a message, keeps that outer hold: what holds it is in
+    // the middle of something.) A board closed meanwhile, or closed and opened again, by another
+    // thread isn't swapped.
+    const unsigned board = g_opened;
     auto unlocked = [](auto wait) {
         LeaveCriticalSection(&g_lock);
         wait();
@@ -384,22 +260,24 @@ void CoreSwap(int interval) {
     };
     const int paced = g_config.vsync == kVSyncAuto ? interval : 1;
     // Under the desktop compositor Present doesn't wait: the swap waits for its slot after
-    // presenting, as many refreshes as Direct3D 9's vsync and LimitSwapInterval waited (at
-    // least one, vsync=off aside: then not paced at all).
+    // presenting, as many refreshes as the game's interval asks (vsync=on: one; vsync=off
+    // aside: then not paced at all).
     const bool compositor = RenderPacedByCompositor();
     unlocked([paced, compositor] {
         LimitFrame();
         if (!compositor) LimitSwapInterval(paced);
     });
-    if (!g_board.open) return;  // (closed by another thread meanwhile)
+    if (!g_board.open || g_opened != board) return;
     const bool shown = RenderSwap(interval);
     // (Asked again: the swap may have made the device anew.)
-    if (shown && g_board.open && RenderPacedByCompositor()) unlocked([paced] { PaceSwap(std::max(paced, 1)); });
+    // (vsync=auto and an interval of 0: not paced, presented at once as the Voodoo swapped.)
+    if (shown && paced > 0 && RenderPacedByCompositor()) unlocked([paced] { PaceSwap(paced); });
+    if (!g_board.open || g_opened != board) return;
     WindowPump();
     // Nothing shown (minimized by Alt+Tab, the device lost): the swap didn't wait for the
     // display, so a refresh's time is waited instead, without the lock (else the game's loop
     // took a whole core, all of it with cpus=1, and its window's thread waited for the lock).
-    if (!shown && g_board.open) unlocked([] { Sleep(16); });
+    if (!shown) unlocked([] { Sleep(16); });
 }
 
 FxU32 CoreTexMaxAddress(GrChipID_t tmu) {
@@ -429,7 +307,8 @@ void CoreTexDownloadMipMap(GrChipID_t tmu, FxU32 startAddress, FxU32 evenOdd, co
 void CoreTexDownloadTable(GrChipID_t tmu, GrTexTable_t type, const void* data, int start, int end) {
     if (!data) return;
     if (type == GR_TEXTABLE_PALETTE || type == GR_TEXTABLE_PALETTE_6666_EXT) {
-        DownloadPalette(tmu, static_cast<const GuTexPalette*>(data)->data, start, end);
+        DownloadPalette(tmu, static_cast<const GuTexPalette*>(data)->data, start, end,
+                        type == GR_TEXTABLE_PALETTE_6666_EXT);
     } else if (type == GR_TEXTABLE_NCC0 || type == GR_TEXTABLE_NCC1) {
         DownloadNcc(tmu, int(type), static_cast<const GuNccTable*>(data));
     }

@@ -1,5 +1,5 @@
 project('gl2d9', 'cpp',
-  version : '1.1.2',
+  version : '1.2.0',
   default_options : ['cpp_std=c++17', 'warning_level=2', 'buildtype=release', 'b_ndebug=if-release'])
 
 cpp = meson.get_compiler('cpp')
@@ -16,10 +16,14 @@ endforeach
 
 static_link = ['-static', '-static-libgcc', '-static-libstdc++']
 
-# What the three DLLs share: the emulated Voodoo and its renderer.
+# What the three DLLs share: the emulated Voodoo and its renderer, and the entry points Glide 2
+# and 3 have alike.
 core = static_library('gl2d9core',
-  'src/main.cpp', 'src/util.cpp', 'src/window.cpp', 'src/state.cpp', 'src/texmem.cpp', 'src/shader.cpp',
-    'src/render.cpp', 'src/lfb.cpp', 'src/core.cpp', 'src/gu.cpp',
+  'src/main.cpp', 'src/aa.cpp', 'src/api_common.cpp', 'src/core.cpp', 'src/display.cpp', 'src/draw.cpp',
+    'src/gu.cpp', 'src/gu3df.cpp', 'src/gump.cpp', 'src/gutex.cpp', 'src/hook.cpp', 'src/lfb.cpp',
+    'src/present.cpp', 'src/render.cpp', 'src/renderlfb.cpp', 'src/renderstate.cpp', 'src/rendertex.cpp',
+    'src/shader.cpp', 'src/shadercache.cpp', 'src/state.cpp', 'src/stipple.cpp', 'src/targets.cpp',
+    'src/texmem.cpp', 'src/util.cpp', 'src/window.cpp',
   dependencies : win_deps)
 
 # Glide 2.1 (Voodoo Graphics).

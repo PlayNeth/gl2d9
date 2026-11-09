@@ -2,7 +2,8 @@
 // (grVertexLayout: offsets of each parameter in the game's vertex), draws arrays of them
 // (strips, fans, lists), takes window or clip coordinates (grCoordinateSpace, grViewport,
 // grDepthRange), and counts LODs and aspects in log2 (8 = 256 ... 0 = 1; 3 = 8x1 ... -3 =
-// 1x8). Everything is converted here for the core, which speaks Glide 2.
+// 1x8). Everything is converted here for the core, which speaks Glide 2. (The entry points
+// that are the same in Glide 2 are in api_common.cpp.)
 #include "core.h"
 #include "gu.h"
 #include "lfb.h"
@@ -67,6 +68,8 @@ struct State3 {
     Layout layout;
     Viewport vp;
     FxU32 coordSpace;
+    bool aa;           // grEnable(GR_AA_ORDERED) (3dfx's state.grEnableArgs)
+    bool palette6666;  // the last table downloaded (3dfx's state.tex_table)
 };
 
 Layout g_layout;
@@ -267,11 +270,6 @@ GLAPI void grGlideInit() try {
     GL_LOG("grGlideInit (Glide 3.x)");
     CoreInit();
 } catch (...) { CallFailed(__func__); }
-GLAPI void grGlideShutdown() try {
-    ENTRY("grGlideShutdown");
-    CoreShutdown();
-} catch (...) { CallFailed(__func__); }
-GLAPI void grSstSelect(int) {}
 GLAPI GrContext_t grSstWinOpen(FxU32 hwnd, GrScreenResolution_t res, GrScreenRefresh_t refresh, GrColorFormat_t format,
                                GrOriginLocation_t origin, int nColBuffers, int nAuxBuffers) try {
     ENTRY("grSstWinOpen");
@@ -291,17 +289,7 @@ GLAPI FxBool grSstWinClose(GrContext_t) try {
 } catch (...) { return CallFailed(__func__, FXFALSE); }
 GLAPI FxBool grSelectContext(GrContext_t ctx) { return ctx != 0 ? FXTRUE : FXFALSE; }
 GLAPI void grSetNumPendingBuffers(FxI32) {}
-GLAPI void grSstOrigin(GrOriginLocation_t o) try {
-    ENTRY("grSstOrigin");
-    st::SstOrigin(o);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grSstVidMode(FxU32, void*) {}
-GLAPI void grSstConfigPipeline(GrChipID_t, FxU32, FxU32) {}
 GLAPI void grSplash(float, float, float, float, FxU32) {}
-GLAPI void grErrorSetCallback(GrErrorCallbackFnc_t fn) try {
-    ENTRY("grErrorSetCallback");
-    g_board.errorCallback = fn;
-} catch (...) { CallFailed(__func__); }
 GLAPI void grFinish() try {
     ENTRY("grFinish");
     RenderFlush();
@@ -346,7 +334,7 @@ GLAPI FxBool grReset(FxU32 what) try {
 GLAPI GrProc grGetProcAddress(char*) { return nullptr; }
 GLAPI const char* grGetString(FxU32 what) try {
     switch (what) {
-    case GR_EXTENSION: return "FOGCOORD";
+    case GR_EXTENSION: return "PALETTE6666 FOGCOORD";
     case GR_HARDWARE: return "Voodoo2";
     case GR_RENDERER: return "Glide";
     case GR_VENDOR: return "3Dfx Interactive";
@@ -357,7 +345,7 @@ GLAPI const char* grGetString(FxU32 what) try {
 GLAPI FxU32 grGet(FxU32 what, FxU32 len, FxI32* p) try {
     ENTRY("grGet");
     if (!p) return 0;
-    if (g_texMem[0].bytes.empty()) CoreInit();
+    CoreEnsureInit();
     auto one = [&](FxI32 v) -> FxU32 {
         if (len != 4) return 0;
         *p = v;
@@ -445,7 +433,7 @@ GLAPI void grDepthRange(float n, float f) try {
 GLAPI void grGlideGetState(void* state) try {
     ENTRY("grGlideGetState");
     if (!state) return;
-    State3 s{St(), g_layout, g_vp, g_coordSpace};
+    State3 s{St(), g_layout, g_vp, g_coordSpace, g_aa, g_board.palette6666};
     memcpy(state, &s, sizeof(s));
 } catch (...) { CallFailed(__func__); }
 GLAPI void grGlideSetState(const void* state) try {
@@ -457,11 +445,15 @@ GLAPI void grGlideSetState(const void* state) try {
     g_layout = s.layout;
     g_vp = s.vp;
     g_coordSpace = s.coordSpace;
+    g_aa = s.aa;
+    g_board.palette6666 = s.palette6666;
 } catch (...) { CallFailed(__func__); }
 GLAPI void grGlideGetVertexLayout(void* layout) try {
+    ENTRY("grGlideGetVertexLayout");
     if (layout) memcpy(layout, &g_layout, sizeof(g_layout));
 } catch (...) { CallFailed(__func__); }
 GLAPI void grGlideSetVertexLayout(const void* layout) try {
+    ENTRY("grGlideSetVertexLayout");
     if (layout) memcpy(&g_layout, layout, sizeof(g_layout));
 } catch (...) { CallFailed(__func__); }
 GLAPI void grVertexLayout(FxU32 param, FxI32 offset, FxU32 mode) try {
@@ -547,96 +539,16 @@ GLAPI void grRenderBuffer(GrBuffer_t b) try {
     ENTRY("grRenderBuffer");
     st::RenderBuffer(b == GR_BUFFER_TRIPLEBUFFER ? GR_BUFFER_BACKBUFFER : b);
 } catch (...) { CallFailed(__func__); }
-GLAPI void grCheckForRoom(FxI32) {}
 
 // ---------------------------------------------------------------- state
 
-GLAPI void grAlphaBlendFunction(GrAlphaBlendFnc_t rs, GrAlphaBlendFnc_t rd, GrAlphaBlendFnc_t as,
-                                GrAlphaBlendFnc_t ad) try {
-    ENTRY("grAlphaBlendFunction");
-    st::AlphaBlendFunction(rs, rd, as, ad);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grAlphaCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o,
-                          FxBool inv) try {
-    ENTRY("grAlphaCombine");
-    st::AlphaCombine(f, k, l, o, inv);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grAlphaControlsITRGBLighting(FxBool e) try {
-    ENTRY("grAlphaControlsITRGBLighting");
-    st::AlphaControlsITRGBLighting(e);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grAlphaTestFunction(GrCmpFnc_t f) try {
-    ENTRY("grAlphaTestFunction");
-    st::AlphaTestFunction(f);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grAlphaTestReferenceValue(GrAlpha_t v) try {
-    ENTRY("grAlphaTestReferenceValue");
-    st::AlphaTestReferenceValue(v);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grChromakeyMode(GrChromakeyMode_t m) try {
-    ENTRY("grChromakeyMode");
-    st::ChromakeyMode(m);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grChromakeyValue(GrColor_t c) try {
-    ENTRY("grChromakeyValue");
-    st::ChromakeyValue(c);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grClipWindow(FxU32 minx, FxU32 miny, FxU32 maxx, FxU32 maxy) try {
-    ENTRY("grClipWindow");
-    st::ClipWindow(minx, miny, maxx, maxy);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grColorCombine(GrCombineFunction_t f, GrCombineFactor_t k, GrCombineLocal_t l, GrCombineOther_t o,
-                          FxBool inv) try {
-    ENTRY("grColorCombine");
-    st::ColorCombine(f, k, l, o, inv);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grColorMask(FxBool rgb, FxBool a) try {
-    ENTRY("grColorMask");
-    st::ColorMask(rgb, a);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grConstantColorValue(GrColor_t c) try {
-    ENTRY("grConstantColorValue");
-    st::ConstantColorValue(c);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grCullMode(GrCullMode_t m) try {
-    ENTRY("grCullMode");
-    st::CullMode(m);
-} catch (...) { CallFailed(__func__); }
 GLAPI void grDepthBiasLevel(FxI32 level) try {
     ENTRY("grDepthBiasLevel");
     st::DepthBiasLevel(FxI16(level));
 } catch (...) { CallFailed(__func__); }
-GLAPI void grDepthBufferFunction(GrCmpFnc_t f) try {
-    ENTRY("grDepthBufferFunction");
-    st::DepthBufferFunction(f);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grDepthBufferMode(GrDepthBufferMode_t m) try {
-    ENTRY("grDepthBufferMode");
-    st::DepthBufferMode(m);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grDepthMask(FxBool e) try {
-    ENTRY("grDepthMask");
-    st::DepthMask(e);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grDisableAllEffects() try {
-    ENTRY("grDisableAllEffects");
-    st::DisableAllEffects();
-} catch (...) { CallFailed(__func__); }
-GLAPI void grDitherMode(GrDitherMode_t m) try {
-    ENTRY("grDitherMode");
-    st::DitherMode(m);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grFogColorValue(GrColor_t c) try {
-    ENTRY("grFogColorValue");
-    st::FogColorValue(c);
-} catch (...) { CallFailed(__func__); }
 GLAPI void grFogMode(GrFogMode_t m) try {
     ENTRY("grFogMode");
     st::FogMode(Fog2(m));
-} catch (...) { CallFailed(__func__); }
-GLAPI void grFogTable(const GrFog_t* t) try {
-    ENTRY("grFogTable");
-    if (t) st::FogTable(t);
 } catch (...) { CallFailed(__func__); }
 GLAPI void grStippleMode(FxI32 mode) try {
     ENTRY("grStippleMode");
@@ -646,17 +558,9 @@ GLAPI void grStipplePattern(FxU32 pattern) try {
     ENTRY("grStipplePattern");
     st::StipplePattern(pattern);
 } catch (...) { CallFailed(__func__); }
-GLAPI void grLfbConstantAlpha(GrAlpha_t a) try {
-    ENTRY("grLfbConstantAlpha");
-    st::LfbConstantAlpha(a);
-} catch (...) { CallFailed(__func__); }
 GLAPI void grLfbConstantDepth(FxU32 d) try {
     ENTRY("grLfbConstantDepth");
     st::LfbConstantDepth(d);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grGammaCorrectionValue(float v) try {
-    ENTRY("grGammaCorrectionValue");
-    RenderSetGamma(v);
 } catch (...) { CallFailed(__func__); }
 GLAPI void guGammaCorrectionRGB(float r, float g, float b) try {
     ENTRY("guGammaCorrectionRGB");
@@ -670,31 +574,6 @@ GLAPI void grLoadGammaTable(FxU32 n, FxU32* r, FxU32* g, FxU32* b) try {
 
 // ---------------------------------------------------------------- textures
 
-GLAPI void grTexClampMode(GrChipID_t tmu, GrTextureClampMode_t s, GrTextureClampMode_t t) try {
-    ENTRY("grTexClampMode");
-    st::TexClampMode(tmu, s, t);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grTexCombine(GrChipID_t tmu, GrCombineFunction_t rf, GrCombineFactor_t rk, GrCombineFunction_t af,
-                        GrCombineFactor_t ak, FxBool ri, FxBool ai) try {
-    ENTRY("grTexCombine");
-    st::TexCombine(tmu, rf, rk, af, ak, ri, ai);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grTexDetailControl(GrChipID_t tmu, int bias, FxU8 scale, float max) try {
-    ENTRY("grTexDetailControl");
-    st::TexDetailControl(tmu, bias, scale, max);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grTexFilterMode(GrChipID_t tmu, GrTextureFilterMode_t mi, GrTextureFilterMode_t ma) try {
-    ENTRY("grTexFilterMode");
-    st::TexFilterMode(tmu, mi, ma);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grTexLodBiasValue(GrChipID_t tmu, float bias) try {
-    ENTRY("grTexLodBiasValue");
-    st::TexLodBiasValue(tmu, bias);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grTexMipMapMode(GrChipID_t tmu, GrMipMapMode_t m, FxBool blend) try {
-    ENTRY("grTexMipMapMode");
-    st::TexMipMapMode(tmu, m, blend);
-} catch (...) { CallFailed(__func__); }
 GLAPI void grTexNCCTable(GrNCCTable_t t) try {
     ENTRY("grTexNCCTable");
     for (int i = 0; i < g_board.numTmu; i++) st::TexNCCTable(i, t);
@@ -702,12 +581,9 @@ GLAPI void grTexNCCTable(GrNCCTable_t t) try {
 GLAPI void grTexSource(GrChipID_t tmu, FxU32 start, FxU32 evenOdd, const GrTexInfo* info) try {
     ENTRY("grTexSource");
     if (!info) return;
-    const GrTexInfo i2 = Info2(info);
+    GrTexInfo i2 = Info2(info);
+    if (i2.format == GR_TEXFMT_P_8 && g_board.palette6666) i2.format = GR_TEXFMT_P_8_6666;
     st::TexSource(tmu, start, evenOdd, &i2);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grTexMultibase(GrChipID_t tmu, FxBool e) try {
-    ENTRY("grTexMultibase");
-    st::TexMultibase(tmu, e);
 } catch (...) { CallFailed(__func__); }
 GLAPI void grTexMultibaseAddress(GrChipID_t tmu, GrTexBaseRange_t range, FxU32 start, FxU32 evenOdd,
                                  const GrTexInfo* info) try {
@@ -716,11 +592,6 @@ GLAPI void grTexMultibaseAddress(GrChipID_t tmu, GrTexBaseRange_t range, FxU32 s
     const GrTexInfo i2 = Info2(info);
     st::TexMultibaseAddress(tmu, G3_TEXBASE_256 - range, start, evenOdd, &i2);
 } catch (...) { CallFailed(__func__); }
-GLAPI FxU32 grTexMinAddress(GrChipID_t) { return 0; }
-GLAPI FxU32 grTexMaxAddress(GrChipID_t tmu) try {
-    ENTRY("grTexMaxAddress");
-    return CoreTexMaxAddress(tmu);
-} catch (...) { return CallFailed(__func__, 0); }
 GLAPI FxU32 grTexCalcMemRequired(GrLOD_t small, GrLOD_t large, GrAspectRatio_t aspect, GrTextureFormat_t fmt) try {
     return TexMemRequired(Lod2(small), Lod2(large), Aspect2(aspect), fmt, GR_MIPMAPLEVELMASK_BOTH);
 } catch (...) { return CallFailed(__func__, 0); }
@@ -755,46 +626,22 @@ GLAPI FxBool grTexDownloadMipMapLevelPartial(GrChipID_t tmu, FxU32 start, GrLOD_
 GLAPI void grTexDownloadTable(GrTexTable_t type, const void* data) try {
     ENTRY("grTexDownloadTable");
     const bool pal = type == GR_TEXTABLE_PALETTE || type == GR_TEXTABLE_PALETTE_6666_EXT;
+    if (data) g_board.palette6666 = type == GR_TEXTABLE_PALETTE_6666_EXT;
     CoreTexDownloadTable(GR_TMU0, type, data, 0, pal ? 255 : 11);
 } catch (...) { CallFailed(__func__); }
 GLAPI void grTexDownloadTablePartial(GrTexTable_t type, const void* data, int start, int end) try {
     ENTRY("grTexDownloadTablePartial");
+    if (data) g_board.palette6666 = type == GR_TEXTABLE_PALETTE_6666_EXT;
     CoreTexDownloadTable(GR_TMU0, type, data, start, end);
 } catch (...) { CallFailed(__func__); }
 
 // ---------------------------------------------------------------- the linear frame buffer
 
-GLAPI FxBool grLfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_t mode, GrOriginLocation_t origin,
-                       FxBool pipeline, GrLfbInfo_t* info) try {
-    ENTRY("grLfbLock");
-    return LfbLock(type, buffer, mode, origin, pipeline, info);
-} catch (...) { return CallFailed(__func__, FXFALSE); }
-GLAPI FxBool grLfbUnlock(GrLock_t type, GrBuffer_t buffer) try {
-    ENTRY("grLfbUnlock");
-    return LfbUnlock(type, buffer);
-} catch (...) { return CallFailed(__func__, FXFALSE); }
-GLAPI FxBool grLfbReadRegion(GrBuffer_t src, FxU32 x, FxU32 y, FxU32 w, FxU32 h, FxU32 stride, void* dst) try {
-    ENTRY("grLfbReadRegion");
-    return LfbReadRegion(src, x, y, w, h, stride, dst);
-} catch (...) { return CallFailed(__func__, FXFALSE); }
 GLAPI FxBool grLfbWriteRegion(GrBuffer_t dst, FxU32 x, FxU32 y, GrLfbSrcFmt_t fmt, FxU32 w, FxU32 h, FxBool pipeline,
                               FxI32 stride, const void* data) try {
     ENTRY("grLfbWriteRegion");
     return LfbWriteRegion(dst, x, y, fmt, w, h, pipeline, stride, data);
 } catch (...) { return CallFailed(__func__, FXFALSE); }
-GLAPI void grLfbWriteColorFormat(GrColorFormat_t f) try {
-    ENTRY("grLfbWriteColorFormat");
-    LfbWriteColorFormat(f);
-} catch (...) { CallFailed(__func__); }
-GLAPI void grLfbWriteColorSwizzle(FxBool, FxBool) {}
-
-// ---------------------------------------------------------------- statistics
-
-GLAPI void grTriStats(FxU32* in, FxU32* out) try {
-    if (in) *in = g_board.trisIn;
-    if (out) *out = g_board.trisOut;
-} catch (...) { CallFailed(__func__); }
-GLAPI void grResetTriStats() { g_board.trisIn = g_board.trisOut = 0; }
 
 // ---------------------------------------------------------------- gu
 
@@ -816,22 +663,9 @@ GLAPI FxBool gu3dfLoad(const char* name, Gu3dfInfo* info) try {
     info->table = i2.table;
     return FXTRUE;
 } catch (...) { return CallFailed(__func__, FXFALSE); }
-GLAPI float guFogTableIndexToW(int i) try { return GuFogTableIndexToW(i); } catch (...) {
-    return CallFailed(__func__, 0.0f);
-}
-GLAPI void guFogGenerateExp(GrFog_t* t, float d) try { GuFogGenerateExp(t, d); } catch (...) {
-    CallFailed(__func__);
-}
-GLAPI void guFogGenerateExp2(GrFog_t* t, float d) try { GuFogGenerateExp2(t, d); } catch (...) {
-    CallFailed(__func__);
-}
-GLAPI void guFogGenerateLinear(GrFog_t* t, float n, float f) try { GuFogGenerateLinear(t, n, f); } catch (...) {
-    CallFailed(__func__);
-}
 
 // ---------------------------------------------------------------- 3dfx's debug library (exported by Glide 3)
 
-static GrErrorCallbackFnc_t g_gdbgCallback;
 GLAPI void gdbg_init() {}
 GLAPI void gdbg_shutdown() {}
 GLAPI const char* gdbg_parse(const char*) { return nullptr; }
@@ -840,8 +674,8 @@ GLAPI int gdbg_set_debuglevel(int, int) { return 0; }
 GLAPI int gdbg_get_debuglevel(int) { return 0; }
 GLAPI int gdbg_get_errors() { return 0; }
 GLAPI void gdbg_set_keepalive(FxBool) {}
-GLAPI void gdbg_error_set_callback(GrErrorCallbackFnc_t fn) { g_gdbgCallback = fn; }
-GLAPI void gdbg_error_clear_callback(GrErrorCallbackFnc_t) { g_gdbgCallback = nullptr; }
+GLAPI void gdbg_error_set_callback(GrErrorCallbackFnc_t) {}  // (gdbg_error only logs: nothing to call)
+GLAPI void gdbg_error_clear_callback(GrErrorCallbackFnc_t) {}
 GLAPI void gdbg_vprintf(const char* fmt, va_list args) try {
     if (!fmt || LogLevel() < 2) return;
     char buf[512];

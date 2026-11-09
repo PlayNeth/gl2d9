@@ -271,6 +271,15 @@ void StipplePattern(FxU32 pattern) {
 
 namespace {
 bool TmuOk(GrChipID_t tmu) { return tmu >= 0 && tmu < g_board.numTmu; }
+
+// Glide's "hack to enable two-pass trilinear" (gtex.c): a TMU with trilinear on whose combine
+// zeroes the other, doesn't reverse the blend, and has any of the bits of 3dfx's
+// SST_TC_BLEND_LODFRAC (sub clocal, add clocal, the LOD fraction factor's) is the odd pass.
+// (3dfx tests those bits with &, not the factor for equality: matched, as games ran on it.)
+bool OddTrilinearPass(FxU32 textureMode) {
+    const FxU32 blendLodFrac = SST_TC_SUB_CLOCAL | SST_TC_ADD_CLOCAL | SST_TC_BLEND_LODFRAC;
+    return (textureMode & SST_TC_ZERO_OTHER) && (textureMode & blendLodFrac) && !(textureMode & SST_TC_REVERSE_BLEND);
+}
 }  // namespace
 
 void TexClampMode(GrChipID_t tmu, GrTextureClampMode_t s, GrTextureClampMode_t t) {
@@ -317,10 +326,7 @@ void TexCombine(GrChipID_t tmu, GrCombineFunction_t rgbFn, GrCombineFactor_t rgb
         break;
     default: break;
     }
-    // Two-pass trilinear: multiply by the LOD fraction without reverse blend is the odd pass.
-    if ((m & SST_TRILINEAR) && (m & SST_TC_ZERO_OTHER) && (m & SST_TC_MSELECT) == SST_TC_BLEND_LODFRAC &&
-        !(m & SST_TC_REVERSE_BLEND))
-        lod |= SST_LOD_ODD;
+    if ((m & SST_TRILINEAR) && OddTrilinearPass(m)) lod |= SST_LOD_ODD;
     lod |= TLodEvenOddBits(St().tmu[tmu].evenOdd);
     R().tmu[tmu].textureMode = m;
     R().tmu[tmu].tLOD = lod;
@@ -366,8 +372,7 @@ void TexMipMapMode(GrChipID_t tmu, GrMipMapMode_t mode, FxBool lodBlend) {
     St().tmu[tmu].mmMode = mode;
     if (lodBlend) {
         m |= SST_TRILINEAR;
-        if ((m & SST_TC_ZERO_OTHER) && (m & SST_TC_MSELECT) == SST_TC_BLEND_LODFRAC && !(m & SST_TC_REVERSE_BLEND))
-            lod |= SST_LOD_ODD;
+        if (OddTrilinearPass(m)) lod |= SST_LOD_ODD;
     }
     lod |= TLodEvenOddBits(c.evenOdd);
     R().tmu[tmu].tLOD = lod;
